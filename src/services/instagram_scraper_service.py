@@ -1,51 +1,107 @@
-import instaloader
-from datetime import datetime
-import time
-import random
-from typing import List, Dict, Optional, Union
+from apify_client import ApifyClient
+from typing import List, Dict, Optional
 import asyncio
+from datetime import datetime
 from fastapi import HTTPException, status
 import re
 from src.config.settings import settings
+from src.services.instagram_data_transformer_service import DataTransformerService
 
 class InstagramScraper:
     def __init__(self):
-        self.L = instaloader.Instaloader()
+        if not settings.APIFY_TOKEN:
+            raise ValueError("APIFY_TOKEN is required for Instagram scraping")
+        
+        self.client = ApifyClient(settings.APIFY_TOKEN)
+        self.actor_id = settings.APIFY_INSTAGRAM_ACTOR_ID
         self.min_delay = settings.MIN_DELAY_BETWEEN_REQUESTS
         self.last_request_time = None
+        self.transformer = DataTransformerService()
         
     async def scrape_profile_posts(
         self, 
         profile_url: str, 
         post_limit: int = 50
     ) -> List[Dict]:
-        """Scrape posts from an Instagram profile URL"""
+        """Scrape Instagram profile posts using Apify"""
         try:
-            username = self._extract_username_from_url(profile_url)
-            if not username:
-                raise ValueError("Invalid Instagram profile URL")
+            print(f"[Instagram Scraper] Starting profile scraping for: {profile_url}")
+            print(f"[Instagram Scraper] Post limit: {post_limit}")
             
             await self._enforce_rate_limit()
             
-            profile = instaloader.Profile.from_username(self.L.context, username)
-            posts = profile.get_posts()
+            # Validate URL
+            if not profile_url.startswith(("https://instagram.com/", "https://www.instagram.com/")):
+                raise ValueError("Invalid Instagram URL")
+            
+            search_type = self._determine_instagram_search_type(profile_url)
+            print(f"[Instagram Scraper] Detected search type: {search_type}")
+            
+            # Prepare Actor input
+            run_input = {
+                "directUrls": [profile_url],
+                "resultsType": "posts",
+                "resultsLimit": post_limit,
+                "searchType": search_type,
+                "searchLimit": 1,
+                "useProxy": True
+            }
+            
+            print(f"[Instagram Scraper] Actor input: {run_input}")
+            
+            # Run the Actor and wait for it to finish
+            print(f"[Instagram Scraper] Starting Apify actor: {self.actor_id}")
+            run = self.client.actor(self.actor_id).call(run_input=run_input)
+            print(f"[Instagram Scraper] Actor run completed. Run ID: {run.get('id', 'unknown')}")
+            
+            # Fetch results from the run's dataset
             scraped_data = []
+            print(f"[Instagram Scraper] Fetching data from dataset: {run['defaultDatasetId']}")
             
-            for post in posts:
+            for i, item in enumerate(self.client.dataset(run["defaultDatasetId"]).iterate_items()):
+                print(f"[Instagram Scraper] Processing item {i+1}")
+                
+                try:
+                    # Transform raw data to structured format using only existing data
+                    print(f"[Instagram Scraper] Transforming raw data for item {i+1}")
+                    structured_post = self.transformer.transform_instagram_post(item)
+                    
+                    # Convert to dictionary for response
+                    transformed_post = {
+                        "source": "instagram",
+                        "structured_data": structured_post.dict(),
+                        "scraped_date": datetime.now(),
+                        "extraction_method": "apify_with_transformation"
+                    }
+                    
+                    scraped_data.append(transformed_post)
+                    print(f"[Instagram Scraper] Successfully transformed item {i+1}")
+                    
+                except Exception as e:
+                    print(f"[Instagram Scraper] Error transforming item {i+1}: {e}")
+                    # Fallback to raw data if transformation fails
+                    raw_post = {
+                        "source": "instagram",
+                        "raw_data": item,
+                        "scraped_date": datetime.now(),
+                        "extraction_method": "apify",
+                        "transformation_error": str(e)
+                    }
+                    scraped_data.append(raw_post)
+                
+                # Limit results
                 if len(scraped_data) >= post_limit:
+                    print(f"[Instagram Scraper] Reached post limit: {post_limit}")
                     break
-                
-                post_data = await self._extract_post_data(post)
-                scraped_data.append(post_data)
-                
-                await asyncio.sleep(random.uniform(0.5, 1.5))
             
+            print(f"[Instagram Scraper] Successfully scraped {len(scraped_data)} posts")
             return scraped_data
             
         except Exception as e:
+            print(f"[Instagram Scraper] Error occurred: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error scraping Instagram profile: {str(e)}"
+                detail=f"Error scraping Instagram profile with Apify: {str(e)}"
             )
     
     async def scrape_hashtag_posts(
@@ -53,135 +109,103 @@ class InstagramScraper:
         hashtag_url: str, 
         post_limit: int = 50
     ) -> List[Dict]:
-        """Scrape posts from an Instagram hashtag URL"""
+        """Scrape Instagram hashtag posts using Apify"""
         try:
-            hashtag = self._extract_hashtag_from_url(hashtag_url)
-            if not hashtag:
-                raise ValueError("Invalid Instagram hashtag URL")
+            print(f"[Instagram Scraper] Starting hashtag scraping for: {hashtag_url}")
+            print(f"[Instagram Scraper] Post limit: {post_limit}")
             
             await self._enforce_rate_limit()
             
-            hashtag_obj = instaloader.Hashtag.from_name(self.L.context, hashtag)
-            posts = hashtag_obj.get_posts()
+            # Validate URL
+            if not hashtag_url.startswith(("https://instagram.com/", "https://www.instagram.com/")):
+                raise ValueError("Invalid Instagram hashtag URL")
+            
+            search_type = self._determine_instagram_search_type(hashtag_url)
+            print(f"[Instagram Scraper] Detected search type: {search_type}")
+            
+            # Prepare Actor input
+            run_input = {
+                "directUrls": [hashtag_url],
+                "resultsType": "posts",
+                "resultsLimit": post_limit,
+                "searchType": search_type,
+                "searchLimit": 1,
+                "useProxy": True
+            }
+            
+            print(f"[Instagram Scraper] Actor input: {run_input}")
+            
+            # Run the Actor and wait for it to finish
+            print(f"[Instagram Scraper] Starting Apify actor: {self.actor_id}")
+            run = self.client.actor(self.actor_id).call(run_input=run_input)
+            print(f"[Instagram Scraper] Actor run completed. Run ID: {run.get('id', 'unknown')}")
+            
+            # Fetch results from the run's dataset
             scraped_data = []
+            print(f"[Instagram Scraper] Fetching data from dataset: {run['defaultDatasetId']}")
             
-            for post in posts:
+            for i, item in enumerate(self.client.dataset(run["defaultDatasetId"]).iterate_items()):
+                print(f"[Instagram Scraper] Processing item {i+1}")
+                
+                try:
+                    # Transform raw data to structured format using only existing data
+                    print(f"[Instagram Scraper] Transforming raw data for item {i+1}")
+                    structured_post = self.transformer.transform_instagram_post(item)
+                    
+                    # Convert to dictionary for response
+                    transformed_post = {
+                        "source": "instagram",
+                        "structured_data": structured_post.dict(),
+                        "scraped_date": datetime.now(),
+                        "extraction_method": "apify_with_transformation"
+                    }
+                    
+                    scraped_data.append(transformed_post)
+                    print(f"[Instagram Scraper] Successfully transformed item {i+1}")
+                    
+                except Exception as e:
+                    print(f"[Instagram Scraper] Error transforming item {i+1}: {e}")
+                    # Fallback to raw data if transformation fails
+                    raw_post = {
+                        "source": "instagram",
+                        "raw_data": item,
+                        "scraped_date": datetime.now(),
+                        "extraction_method": "apify",
+                        "transformation_error": str(e)
+                    }
+                    scraped_data.append(raw_post)
+                
+                # Limit results
                 if len(scraped_data) >= post_limit:
+                    print(f"[Instagram Scraper] Reached post limit: {post_limit}")
                     break
-                
-                post_data = await self._extract_post_data(post)
-                scraped_data.append(post_data)
-                
-                await asyncio.sleep(random.uniform(0.5, 1.5))
             
+            print(f"[Instagram Scraper] Successfully scraped {len(scraped_data)} posts")
             return scraped_data
             
         except Exception as e:
+            print(f"[Instagram Scraper] Error occurred: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error scraping Instagram hashtag: {str(e)}"
+                detail=f"Error scraping Instagram hashtag with Apify: {str(e)}"
             )
     
-    async def _extract_post_data(self, post) -> Dict:
-        """Extract all required metadata from a post"""
-        try:
-            comments_count = post.comments
-            likes_count = post.likes
-            
-            location_name = None
-            if post.location:
-                location_name = post.location.name
-            
-            comments_preview = []
-            try:
-                for comment in post.get_comments()[:3]:
-                    comments_preview.append({
-                        "text": comment.text,
-                        "owner_username": comment.owner.username,
-                        "likes_count": comment.likes_count
-                    })
-            except:
-                pass
-            
-            post_data = {
-                "source": "instagram",
-                "post_url": f"https://instagram.com/p/{post.shortcode}/",
-                "image_url": post.url,
-                "caption": post.caption,
-                "title": post.title,
-                "accessibility_caption": post.accessibility_caption,
-                "hashtags": post.caption_hashtags,
-                "mentions": post.caption_mentions,
-                "tagged_users": post.tagged_users,
-                "likes_count": likes_count,
-                "comments_count": comments_count,
-                "comments_preview": comments_preview,
-                "posted_date": post.date_utc,
-                "is_video": post.is_video,
-                "video_url": post.video_url if post.is_video else None,
-                "video_view_count": post.video_view_count if post.is_video else None,
-                "location": location_name,
-                "owner": {
-                    "username": post.owner_username,
-                    "user_id": post.owner_id,
-                    "profile_url": f"https://instagram.com/{post.owner_username}/"
-                },
-                "scraped_date": datetime.now(),
-                "extraction_method": "instaloader"
-            }
-            
-            return post_data
-            
-        except Exception as e:
-            return {
-                "source": "instagram",
-                "post_url": f"https://instagram.com/p/{post.shortcode}/",
-                "image_url": post.url,
-                "caption": post.caption if hasattr(post, 'caption') else None,
-                "posted_date": post.date_utc,
-                "owner": {
-                    "username": post.owner_username,
-                    "user_id": post.owner_id
-                },
-                "scraped_date": datetime.now(),
-                "extraction_method": "instaloader",
-                "extraction_error": str(e)
-            }
-    
-    def _extract_username_from_url(self, url: str) -> Optional[str]:
-        """Extract username from Instagram profile URL"""
-        patterns = [
-            r'instagram\.com/([^/?]+)',
-            r'instagram\.com/([^/?]+)/'
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                username = match.group(1)
-                return username.rstrip('/')
-        return None
-    
-    def _extract_hashtag_from_url(self, url: str) -> Optional[str]:
-        """Extract hashtag from Instagram hashtag URL"""
-        patterns = [
-            r'instagram\.com/explore/tags/([^/?]+)',
-            r'instagram\.com/explore/tags/([^/?]+)/'
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                hashtag = match.group(1)
-                return hashtag.rstrip('/')
-        return None
+    def _determine_instagram_search_type(self, url: str) -> str:
+        """Determine Instagram search type based on URL"""
+        if "/explore/tags/" in url:
+            return "hashtag"
+        elif "/p/" in url:
+            return "post"
+        else:
+            return "user"
     
     async def _enforce_rate_limit(self):
         """Enforce rate limiting between requests"""
         if self.last_request_time:
             time_since_last = (datetime.now() - self.last_request_time).total_seconds()
             if time_since_last < self.min_delay:
-                delay = self.min_delay - time_since_last + random.uniform(0, 1)
+                delay = self.min_delay - time_since_last
+                print(f"[Instagram Scraper] Rate limiting: waiting {delay:.2f} seconds")
                 await asyncio.sleep(delay)
         
         self.last_request_time = datetime.now()

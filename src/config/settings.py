@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
@@ -18,9 +18,13 @@ class Settings(BaseSettings):
     SECRET_KEY: str
 
     # Scraping Configuration
-    SCRAPE_CREATORS_API_KEY: str
+    APIFY_TOKEN: Optional[str] = None
     MIN_DELAY_BETWEEN_REQUESTS: int = 2
     MAX_POSTS_PER_REQUEST: int = 100
+    
+    # Apify Actor IDs
+    APIFY_INSTAGRAM_ACTOR_ID: str = "apify/instagram-scraper"
+    APIFY_PINTEREST_ACTOR_ID: str = "epctex/pinterest-scraper"
     
     class Config:
         env_file = ".env"  # This tells Pydantic to read from .env file
