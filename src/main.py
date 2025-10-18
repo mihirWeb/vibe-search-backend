@@ -10,6 +10,8 @@ from src.config.database import engine, Base
 
 # Import all models to ensure they're registered with Base
 from src.models.instagram_post_model import InstagramPost
+from src.models.product_model import Product
+from src.models.product_item_model import ProductItem
 
 app = FastAPI(
     title=settings.APP_NAME,
