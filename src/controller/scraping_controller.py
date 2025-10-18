@@ -1,25 +1,28 @@
 from typing import List, Dict, Optional
 import re
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Depends
 from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.instagram_scraper_service import InstagramScraper
 from src.services.pinterest_scraper_service import PinterestScraper
 from src.schemas.scraping_schema import ScrapeRequest, ScrapeResponse, ScrapedPost, BatchScrapeRequest, BatchScrapeResponse
 from src.config.settings import settings
+from src.config.database import get_db
 
 class ScrapingService:
-    def __init__(self):
+    def __init__(self, db_session: Optional[AsyncSession] = None):
         print("[Scraping Service] Initializing Instagram and Pinterest scrapers")
-        self.instagram_scraper = InstagramScraper()
+        self.db_session = db_session
+        self.instagram_scraper = InstagramScraper(db_session) if db_session else InstagramScraper()
         self.pinterest_scraper = PinterestScraper()
         print("[Scraping Service] Scrapers initialized successfully")
     
-    async def scrape_social_media_posts(self, request: ScrapeRequest) -> ScrapeResponse:
+    async def scrape_social_media_posts(self, request: ScrapeRequest, save_to_db: bool = True) -> ScrapeResponse:
         """Main method to scrape posts from Instagram or Pinterest"""
         try:
             print(f"[Scraping Service] Starting scraping request for URL: {request.url}")
-            print(f"[Scraping Service] Post limit: {request.post_limit}")
+            print(f"[Scraping Service] Post limit: {request.post_limit}, Save to DB: {save_to_db}")
             
             # Validate post limit
             if request.post_limit > settings.MAX_POSTS_PER_REQUEST:
@@ -34,7 +37,7 @@ class ScrapingService:
             
             if platform == "instagram":
                 print("[Scraping Service] Calling Instagram scraper")
-                posts_data = await self._scrape_instagram(str(request.url), request.post_limit)
+                posts_data = await self._scrape_instagram(str(request.url), request.post_limit, save_to_db)
                 estimated_cost = len(posts_data) * 0.0015  # $1.50 per 1000 results
                 print(f"[Scraping Service] Instagram scraping completed. Posts: {len(posts_data)}, Cost: ${estimated_cost:.4f}")
             elif platform == "pinterest":
@@ -77,7 +80,7 @@ class ScrapingService:
                 detail=f"An error occurred while scraping: {str(e)}"
             )
     
-    async def scrape_batch(self, request: BatchScrapeRequest) -> BatchScrapeResponse:
+    async def scrape_batch(self, request: BatchScrapeRequest, save_to_db: bool = True) -> BatchScrapeResponse:
         """Scrape multiple URLs in batch"""
         try:
             print(f"[Scraping Service] Starting batch scraping for {len(request.urls)} URLs")
@@ -93,7 +96,7 @@ class ScrapingService:
                     
                     # Create individual scrape request
                     individual_request = ScrapeRequest(url=url, post_limit=request.post_limit)
-                    response = await self.scrape_social_media_posts(individual_request)
+                    response = await self.scrape_social_media_posts(individual_request, save_to_db)
                     
                     # Add posts to the batch result
                     all_posts.extend(response.posts)
@@ -131,17 +134,17 @@ class ScrapingService:
                 detail=f"Batch scraping failed: {str(e)}"
             )
     
-    async def _scrape_instagram(self, url: str, post_limit: int) -> List[Dict]:
+    async def _scrape_instagram(self, url: str, post_limit: int, save_to_db: bool = True) -> List[Dict]:
         """Scrape Instagram posts"""
         print(f"[Scraping Service] Determining Instagram scraping method for: {url}")
         
         # Determine if it's a profile or hashtag URL
         if "/explore/tags/" in url:
             print("[Scraping Service] Using hashtag scraping method")
-            return await self.instagram_scraper.scrape_hashtag_posts(url, post_limit)
+            return await self.instagram_scraper.scrape_hashtag_posts(url, post_limit, save_to_db)
         else:
             print("[Scraping Service] Using profile scraping method")
-            return await self.instagram_scraper.scrape_profile_posts(url, post_limit)
+            return await self.instagram_scraper.scrape_profile_posts(url, post_limit, save_to_db)
     
     async def _scrape_pinterest(self, url: str, post_limit: int, use_api: bool = True) -> List[Dict]:
         """Scrape Pinterest posts"""
