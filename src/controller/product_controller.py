@@ -17,7 +17,10 @@ from src.schemas.product_schema import (
     BatchExtractProductRequest,
     BatchExtractProductResponse,
     ProductListResponse,
-    ProductSchema
+    ProductSchema,
+    ProductSchemaMinimal,
+    ProductItemSchema,
+    ProductItemMinimalSchema
 )
 
 
@@ -57,7 +60,7 @@ class ProductController:
             post_data = self._instagram_post_to_dict(instagram_post)
             
             # Extract product using the extraction service
-            product_data = self.extraction_service.process_instagram_post_to_product(post_data)
+            product_data = await self.extraction_service.process_instagram_post_to_product(post_data)
             
             # Save product to database
             saved_product = await self.product_repository.create_product(product_data)
@@ -148,8 +151,8 @@ class ProductController:
                 detail=f"Error in batch extraction: {str(e)}"
             )
     
-    async def get_product_by_id(self, product_id: int) -> ProductSchema:
-        """Get a product by ID"""
+    async def get_product_by_id(self, product_id: int) -> ProductSchemaMinimal:
+        """Get a product by ID with minimal schema (excludes embeddings)"""
         try:
             print(f"[Product Controller] Fetching product with ID: {product_id}")
             
@@ -161,7 +164,7 @@ class ProductController:
                     detail=f"Product not found with ID: {product_id}"
                 )
             
-            return self._product_model_to_schema(product)
+            return self._product_model_to_minimal_schema(product)
             
         except HTTPException:
             raise
@@ -173,13 +176,13 @@ class ProductController:
             )
     
     async def get_recent_products(self, limit: int = 50) -> ProductListResponse:
-        """Get recent products"""
+        """Get recent products with minimal schema (excludes embeddings)"""
         try:
             print(f"[Product Controller] Fetching {limit} recent products")
             
             products = await self.product_repository.get_recent_products(limit)
             
-            product_schemas = [self._product_model_to_schema(p) for p in products]
+            product_schemas = [self._product_model_to_minimal_schema(p) for p in products]
             
             response = ProductListResponse(
                 success=True,
@@ -198,13 +201,13 @@ class ProductController:
             )
     
     async def get_products_by_brand(self, brand: str, limit: int = 50) -> ProductListResponse:
-        """Get products by brand"""
+        """Get products by brand with minimal schema (excludes embeddings)"""
         try:
             print(f"[Product Controller] Fetching products for brand: {brand}")
             
             products = await self.product_repository.get_products_by_brand(brand, limit)
             
-            product_schemas = [self._product_model_to_schema(p) for p in products]
+            product_schemas = [self._product_model_to_minimal_schema(p) for p in products]
             
             response = ProductListResponse(
                 success=True,
@@ -247,8 +250,32 @@ class ProductController:
         }
     
     def _product_model_to_schema(self, product) -> ProductSchema:
-        """Convert Product model to ProductSchema"""
-        # Avoid including embeddings in the response by default (they're large)
+        """Convert Product model to ProductSchema (full schema)"""
+        # Convert items to schemas
+        item_schemas = []
+        if product.items:  # Check if items relationship is loaded
+            for item in product.items:
+                item_schema = ProductItemSchema(
+                    id=item.id,
+                    product_id=item.product_id,
+                    name=item.name,
+                    brand=item.brand,
+                    category=item.category,
+                    style=item.style,
+                    colors=item.colors,
+                    product_type=item.product_type,
+                    description=item.description,
+                    visual_features=item.visual_features,
+                    embedding=item.embedding,
+                    text_embedding=item.text_embedding,
+                    bounding_box=item.bounding_box,
+                    confidence_score=item.confidence_score,
+                    meta_info=item.meta_info,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at
+                )
+                item_schemas.append(item_schema)
+        
         return ProductSchema(
             id=product.id,
             name=product.name,
@@ -260,10 +287,50 @@ class ProductController:
             style=product.style,
             colors=product.colors,
             caption=product.caption,
-            embedding=None,  # Exclude embeddings from API response
-            text_embedding=None,  # Exclude embeddings from API response
-            meta_info=product.meta_info,  # Changed from metadata to meta_info
-            items=[],  # Items can be loaded separately if needed
+            embedding=product.embedding,
+            text_embedding=product.text_embedding,
+            meta_info=product.meta_info,
+            items=item_schemas,
+            created_at=product.created_at,
+            updated_at=product.updated_at
+        )
+    
+    def _product_model_to_minimal_schema(self, product) -> ProductSchemaMinimal:
+        """Convert Product model to ProductSchemaMinimal (excludes embeddings)"""
+        # Convert items to minimal schemas
+        item_schemas = []
+        if product.items:  # Check if items relationship is loaded
+            for item in product.items:
+                item_schema = ProductItemMinimalSchema(
+                    id=item.id,
+                    product_id=item.product_id,
+                    name=item.name,
+                    brand=item.brand,
+                    category=item.category,
+                    sub_category=item.sub_category,
+                    product_type=item.product_type,
+                    gender=item.gender,
+                    style=item.style,
+                    colors=item.colors,
+                    visual_features=item.visual_features,
+                    bounding_box=item.bounding_box,
+                    confidence_score=item.confidence_score
+                )
+                item_schemas.append(item_schema)
+        
+        return ProductSchemaMinimal(
+            id=product.id,
+            name=product.name,
+            description=product.description,
+            image_url=product.image_url,
+            source_url=product.source_url,
+            brand=product.brand,
+            category=product.category,
+            style=product.style,
+            colors=product.colors,
+            caption=product.caption,
+            meta_info=product.meta_info,
+            items=item_schemas,
             created_at=product.created_at,
             updated_at=product.updated_at
         )

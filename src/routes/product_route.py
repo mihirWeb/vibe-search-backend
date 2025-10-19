@@ -13,7 +13,7 @@ from src.schemas.product_schema import (
     BatchExtractProductRequest,
     BatchExtractProductResponse,
     ProductListResponse,
-    ProductSchema
+    ProductSchemaMinimal
 )
 from src.controller.product_controller import ProductController
 from src.config.database import get_db
@@ -122,15 +122,15 @@ async def batch_extract_products_from_instagram_posts(
         )
 
 
-@router.get("/{product_id}", response_model=ProductSchema)
+@router.get("/{product_id}", response_model=ProductSchemaMinimal)
 async def get_product_by_id(
     product_id: int,
     controller: ProductController = Depends(get_product_controller)
-) -> ProductSchema:
+) -> ProductSchemaMinimal:
     """
     Get a product by ID.
     
-    Retrieves a single product with all its metadata.
+    Retrieves a single product with its metadata.
     Embeddings are excluded from the response for performance.
     
     **Parameters:**
@@ -141,6 +141,7 @@ async def get_product_by_id(
     - Style attributes and dominant colors
     - Original Instagram caption
     - Metadata (source, post ID, hashtags, engagement metrics)
+    - Items with minimal information (id, product_id, name, category, style, bounding_box, confidence_score)
     """
     try:
         return await controller.get_product_by_id(product_id)
@@ -162,6 +163,7 @@ async def get_recent_products(
     Get recent products.
     
     Retrieves the most recently extracted products, ordered by creation date.
+    Embeddings are excluded from the response for performance.
     
     **Parameters:**
     - `limit`: Maximum number of products to return (default: 50, max: 100)
@@ -169,6 +171,7 @@ async def get_recent_products(
     **Returns:**
     - List of products with metadata
     - Total count of products returned
+    - Items with minimal information (id, product_id, name, category, style, bounding_box, confidence_score)
     """
     try:
         return await controller.get_recent_products(limit)
@@ -191,6 +194,7 @@ async def get_products_by_brand(
     Get products by brand.
     
     Retrieves all products for a specific brand, ordered by creation date.
+    Embeddings are excluded from the response for performance.
     
     **Parameters:**
     - `brand`: The brand name to filter by
@@ -203,6 +207,7 @@ async def get_products_by_brand(
     **Returns:**
     - List of products from the specified brand
     - Total count of products returned
+    - Items with minimal information (id, product_id, name, category, style, bounding_box, confidence_score)
     """
     try:
         return await controller.get_products_by_brand(brand, limit)
