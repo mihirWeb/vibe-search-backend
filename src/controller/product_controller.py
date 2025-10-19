@@ -305,8 +305,14 @@ class ProductController:
                     id=item.id,
                     product_id=item.product_id,
                     name=item.name,
+                    brand=item.brand,
                     category=item.category,
+                    sub_category=item.sub_category,
+                    product_type=item.product_type,
+                    gender=item.gender,
                     style=item.style,
+                    colors=item.colors,
+                    visual_features=item.visual_features,
                     bounding_box=item.bounding_box,
                     confidence_score=item.confidence_score
                 )

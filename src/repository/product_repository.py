@@ -26,7 +26,7 @@ class ProductRepository:
         try:
             print(f"[Product Repository] Creating product: {product_data['name']}")
 
-            # Create product record - note: using meta_info instead of metadata
+            # Create product record
             product = Product(
                 name=product_data["name"],
                 description=product_data["description"],
@@ -39,15 +39,15 @@ class ProductRepository:
                 caption=product_data["caption"],
                 embedding=product_data["embedding"],
                 text_embedding=product_data["text_embedding"],
-                meta_info=product_data.get("metadata", {})  # Changed from metadata to meta_info
+                meta_info=product_data.get("metadata", {})
             )
 
             self.db_session.add(product)
-            await self.db_session.flush()  # Flush to get the product ID
+            await self.db_session.flush()
 
             print(f"[Product Repository] Product created with ID: {product.id}")
 
-            # Create items - prepare all items first
+            # Create items with new fields
             items = []
             for item_data in product_data["items"]:
                 item = ProductItem(
@@ -55,24 +55,23 @@ class ProductRepository:
                     name=item_data["name"],
                     brand=item_data.get("brand"),
                     category=item_data["category"],
+                    sub_category=item_data.get("sub_category"),  # New field
+                    product_type=item_data["product_type"],
+                    gender=item_data.get("gender"),  # New field
                     style=item_data["style"],
                     colors=item_data["colors"],
-                    product_type=item_data["product_type"],
                     description=item_data["description"],
                     visual_features=item_data["visual_features"],
                     embedding=item_data["embedding"],
                     text_embedding=item_data["text_embedding"],
                     bounding_box=item_data["bounding_box"],
                     confidence_score=item_data["confidence_score"],
-                    meta_info=item_data.get("metadata", {})  # Changed from metadata to meta_info
+                    meta_info=item_data.get("metadata", {})
                 )
                 items.append(item)
                 self.db_session.add(item)
 
-            # Commit all changes at once
             await self.db_session.commit()
-
-            # Refresh to get the latest state
             await self.db_session.refresh(product)
 
             print(f"[Product Repository] Product saved with {len(items)} items")

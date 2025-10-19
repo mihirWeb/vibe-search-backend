@@ -34,7 +34,7 @@ def get_device():
 
 
 def get_clip_model():
-    """Lazy load Open-CLIP model for visual embeddings"""
+    """Lazy load Open-CLIP model for visual embedding"""
     global _clip_model, _preprocess, _tokenizer
     
     if _clip_model is None:

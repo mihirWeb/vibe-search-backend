@@ -14,15 +14,17 @@ from src.utils.image_processing import (
     detect_items_with_yolo,
     classify_with_open_clip
 )
+from src.utils.category_classifier import CategoryClassifier
 
 
 class ProductExtractionService:
     """Service for extracting products and items from Instagram posts"""
     
     def __init__(self):
+        self.category_classifier = CategoryClassifier()
         print("[Product Extraction Service] Initialized")
     
-    def process_instagram_post_to_product(self, post_data: Dict) -> Dict:
+    async def process_instagram_post_to_product(self, post_data: Dict) -> Dict:
         """
         Process Instagram post data to create a product with items.
         This is the main orchestration method that follows the exact logic from the reference code.
@@ -51,7 +53,8 @@ class ProductExtractionService:
         # Process each detected item
         processed_items = self._process_detected_items(
             main_image, 
-            detected_items
+            detected_items,
+            caption_text
         )
         
         # Create product
@@ -68,7 +71,12 @@ class ProductExtractionService:
         print(f"[Product Extraction Service] Product created with {len(processed_items)} items")
         return product
     
-    def _process_detected_items(self, main_image: Image.Image, detected_items: List[Dict]) -> List[Dict]:
+    def _process_detected_items(
+        self, 
+        main_image: Image.Image, 
+        detected_items: List[Dict],
+        caption_text: str = ""
+    ) -> List[Dict]:
         """Process each detected item to extract features and embeddings"""
         print(f"[Product Extraction Service] Processing {len(detected_items)} detected items")
         
@@ -91,8 +99,9 @@ class ProductExtractionService:
                 
                 # Classify the item
                 categories = ["T-shirt", "Shirt", "Shorts", "Jeans", "Shoes", "Sneakers", 
-                             "Jacket", "Hoodie", "Hat", "Bag", "Watch"]
-                category, confidence = classify_with_open_clip(item_image, categories)
+                             "Jacket", "Hoodie", "Hat", "Bag", "Watch", "Sweatshirt", 
+                             "Pants", "Boots", "Sunglasses", "Backpack"]
+                detected_category, confidence = classify_with_open_clip(item_image, categories)
                 
                 # Classify style
                 styles = ["casual", "formal", "sporty", "streetwear", "luxury", "minimal"]
@@ -101,26 +110,38 @@ class ProductExtractionService:
                 # Generate visual embedding for the item
                 item_visual_embedding = generate_visual_embedding(item_image)
                 
-                # Create item description for text embedding
-                item_description = f"{item.get('brand', '')} {item.get('product_type', category)}"
-                if item.get("source") == "caption_collab":
-                    item_description += f" collaboration between {item.get('brand', '')}"
+                # Create item description for text embedding and classification
+                item_name = item.get("product_type", detected_category)
+                item_brand = item.get("brand")
+                item_description = f"{item_brand} {item_name}" if item_brand else item_name
                 
                 # Generate text embedding for the item
                 item_text_embedding = generate_text_embedding(item_description)
                 
-                # Create processed item
+                # **NEW: Classify item into structured categories**
+                classification = self.category_classifier.classify_item(
+                    detected_label=detected_category,
+                    item_name=item_name,
+                    description=f"{item_description} {caption_text}",
+                    brand=item_brand
+                )
+                
+                # Create processed item with new category fields
                 processed_item = {
-                    "name": item.get("product_type", category),
-                    "brand": item.get("brand"),
-                    "category": category,
+                    "name": item_name,
+                    "brand": item_brand,
+                    "category": classification["category"],  # Updated to use enum value
+                    "sub_category": classification["sub_category"],  # New field
+                    "product_type": classification["product_type"],  # Updated to use enum value
+                    "gender": classification["gender"],  # New field
                     "style": [style],
                     "colors": item_colors,
-                    "product_type": item.get("product_type", category),
                     "description": item_description,
                     "visual_features": {
                         "dominant_colors": item_colors,
-                        "detected_category": category,
+                        "detected_category": detected_category,
+                        "classified_category": classification["category"],
+                        "classified_sub_category": classification["sub_category"],
                         "style_attributes": [style],
                         "visual_patterns": []
                     },
@@ -131,15 +152,19 @@ class ProductExtractionService:
                     "metadata": {
                         "source": "image_detection",
                         "detection_label": item.get("label"),
-                        "caption_source": item.get("source")
+                        "caption_source": item.get("source"),
+                        "classification_confidence": confidence
                     }
                 }
                 
                 processed_items.append(processed_item)
-                print(f"[Product Extraction Service] Processed item: {processed_item['name']}")
+                print(f"[Product Extraction Service] Processed item: {processed_item['name']} "
+                      f"(Category: {classification['category']}, Gender: {classification['gender']})")
                 
             except Exception as e:
                 print(f"[Product Extraction Service] Error processing item: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
                 continue
         
         return processed_items
@@ -189,7 +214,7 @@ class ProductExtractionService:
             "category": "Fashion",
             "style": caption_metadata["style"],
             "colors": product_colors,
-            "caption": caption_text,  # Store the original caption
+            "caption": caption_text,
             "embedding": visual_embedding,
             "text_embedding": text_embedding,
             "metadata": {

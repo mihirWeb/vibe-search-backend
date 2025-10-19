@@ -8,8 +8,14 @@ class ProductItemMinimalSchema(BaseModel):
     id: int
     product_id: int
     name: str
+    brand: Optional[str] = None
     category: str
+    sub_category: Optional[str] = None
+    product_type: str
+    gender: Optional[str] = None
     style: Optional[List[str]] = None
+    colors: Optional[List[str]] = None
+    visual_features: Optional[Dict[str, Any]] = None
     bounding_box: Optional[List[float]] = None
     confidence_score: Optional[float] = None
 
@@ -24,9 +30,11 @@ class ProductItemSchema(BaseModel):
     name: str
     brand: Optional[str] = None
     category: str
+    sub_category: Optional[str] = None
+    product_type: str
+    gender: Optional[str] = None
     style: Optional[List[str]] = None
     colors: Optional[List[str]] = None
-    product_type: str
     description: Optional[str] = None
     visual_features: Optional[Dict[str, Any]] = None
     embedding: Optional[List[float]] = None
