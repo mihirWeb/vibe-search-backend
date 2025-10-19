@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     APIFY_INSTAGRAM_ACTOR_ID: str = "apify/instagram-scraper"
     APIFY_PINTEREST_ACTOR_ID: str = "epctex/pinterest-scraper"
     
+    # PyTorch Configuration for Windows
+    KMP_DUPLICATE_LIB_OK: str = "TRUE"
+    OMP_NUM_THREADS: str = "1"
+    TORCH_HOME: str = "./torch_cache"
+    
+    # Image Processing Configuration
+    USE_MOCK_IMAGE_SERVICE: bool = False
+    IMAGE_PROCESSING_TIMEOUT: int = 30
+    MAX_IMAGE_SIZE: int = 2048
+    
     class Config:
         env_file = ".env"  # This tells Pydantic to read from .env file
 
