@@ -46,12 +46,13 @@ class ProductRepository:
             
             print(f"[Product Repository] Product created with ID: {product.id}")
             
-            # Save items to database
+            # Create items - prepare all items first
+            items = []
             for item_data in product_data["items"]:
                 item = ProductItem(
                     product_id=product.id,
                     name=item_data["name"],
-                    brand=item_data["brand"],
+                    brand=item_data.get("brand"),
                     category=item_data["category"],
                     style=item_data["style"],
                     colors=item_data["colors"],
@@ -64,13 +65,16 @@ class ProductRepository:
                     confidence_score=item_data["confidence_score"],
                     meta_info=item_data.get("metadata", {})  # Changed from metadata to meta_info
                 )
+                items.append(item)
                 self.db_session.add(item)
             
-            # Commit changes
+            # Commit all changes at once
             await self.db_session.commit()
+            
+            # Refresh to get the latest state
             await self.db_session.refresh(product)
             
-            print(f"[Product Repository] Product saved with {len(product_data['items'])} items")
+            print(f"[Product Repository] Product saved with {len(items)} items")
             return product
             
         except IntegrityError as e:
@@ -83,8 +87,6 @@ class ProductRepository:
             import traceback
             print(traceback.format_exc())
             raise e
-    
-    # ...existing code...
     
     async def get_product_by_id(self, product_id: int) -> Optional[Product]:
         """Get a product by ID"""
@@ -139,7 +141,7 @@ class ProductRepository:
             raise e
     
     async def get_product_items_by_product_id(self, product_id: int) -> List[ProductItem]:
-        """Get all items for a specific product"""
+        """Get all items for a specific product in db"""
         try:
             print(f"[Product Repository] Fetching items for product ID: {product_id}")
             

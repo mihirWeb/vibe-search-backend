@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from datetime import datetime
+from sqlalchemy import text
 import traceback
 
 from src.config.settings import settings
@@ -33,6 +34,16 @@ async def startup_event():
     """Initialize database on startup"""
     try:
         async with engine.begin() as conn:
+            # First, try to create the pgvector extension
+            try:
+                print("[Startup] Creating pgvector extension...")
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+                print("[Startup] ✓ pgvector extension installed/verified")
+            except Exception as e:
+                print(f"[Startup] ✗ Could not install pgvector extension: {e}")
+                print("[Startup] The pgvector/pgvector Docker image should have this pre-installed")
+                raise Exception("pgvector extension not available")
+            
             # Create all tables defined in your models
             await conn.run_sync(Base.metadata.create_all)
             print("[Startup] Database tables created successfully")
@@ -43,6 +54,7 @@ async def startup_event():
             
     except Exception as e:
         print(f"[Startup] Error creating database tables: {e}")
+        print(traceback.format_exc())
         # Don't raise here to allow app to start even if DB fails
         # raise e
 
@@ -61,7 +73,7 @@ async def root():
         "message": f"{settings.APP_NAME} is running",
         "version": settings.VERSION,
         "environment": settings.ENVIRONMENT,
-        "database_url": settings.DATABASE_URL,
+        "database_url": settings.DATABASE_URL.split("@")[1] if "@" in settings.DATABASE_URL else "***",
         "tables": list(Base.metadata.tables.keys())
     }
 

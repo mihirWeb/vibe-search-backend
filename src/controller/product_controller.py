@@ -262,7 +262,7 @@ class ProductController:
             caption=product.caption,
             embedding=None,  # Exclude embeddings from API response
             text_embedding=None,  # Exclude embeddings from API response
-            metadata=product.metadata,
+            meta_info=product.meta_info,  # Changed from metadata to meta_info
             items=[],  # Items can be loaded separately if needed
             created_at=product.created_at,
             updated_at=product.updated_at
