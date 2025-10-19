@@ -13,6 +13,7 @@ from src.config.database import engine, Base
 from src.models.instagram_post_model import InstagramPost
 from src.models.product_model import Product
 from src.models.product_item_model import ProductItem
+from src.models.store_item_model import StoreItem  # Add this import
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -51,6 +52,37 @@ async def startup_event():
             # Print created tables for verification
             table_names = list(Base.metadata.tables.keys())
             print(f"[Startup] Created tables: {table_names}")
+            
+            # Create vector indexes for store_items if table exists
+            try:
+                print("[Startup] Creating vector indexes for store_items...")
+                
+                # Create regular indexes one by one
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_store_items_sku_id ON store_items(sku_id);"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_store_items_category ON store_items(category);"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_store_items_brand ON store_items(brand_name);"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_store_items_product_type ON store_items(product_type);"))
+                
+                # Create vector indexes one by one
+                await conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_store_items_textual_embedding 
+                        ON store_items USING hnsw (textual_embedding vector_cosine_ops);
+                """))
+                
+                await conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_store_items_visual_embedding 
+                        ON store_items USING hnsw (visual_embedding vector_cosine_ops);
+                """))
+                
+                await conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_store_items_multimodal_embedding 
+                        ON store_items USING hnsw (multimodal_embedding vector_cosine_ops);
+                """))
+                
+                print("[Startup] ✓ Vector indexes created for store_items")
+            except Exception as e:
+                print(f"[Startup] Note: Vector indexes might already exist or table not created yet: {e}")
+                print(traceback.format_exc())
             
     except Exception as e:
         print(f"[Startup] Error creating database tables: {e}")
