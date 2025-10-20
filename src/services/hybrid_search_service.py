@@ -119,22 +119,23 @@ class VectorSearchService:
             # Convert embedding to PostgreSQL vector string format
             embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
             
-            # Build query with bindparam for explicit parameter declaration
-            query_parts = ["""
+            # Build query - embed the vector string directly in SQL
+            # Since we're using string substitution for the vector, don't bind it as a parameter
+            query_parts = [f"""
                 SELECT 
                     id, sku_id, title, description, category, sub_category,
                     brand_name, product_type, gender, colorways, lowest_price,
                     featured_image, pdp_url, wishlist_num, tags,
-                    1 - (textual_embedding <=> :embedding::vector) as similarity_score
+                    1 - (textual_embedding <=> '{embedding_str}'::vector) as similarity_score
                 FROM store_items
                 WHERE textual_embedding IS NOT NULL
             """]
             
-            # Prepare bindparams list
-            bindparams_list = [bindparam("embedding"), bindparam("top_k")]
+            # Prepare bindparams list (without embedding since it's in the query string)
+            bindparams_list = [bindparam("top_k")]
             
-            # Use dictionary for parameters
-            params = {"embedding": embedding_str, "top_k": top_k}
+            # Use dictionary for parameters (without embedding)
+            params = {"top_k": top_k}
             
             # Add filters with named parameters
             if filters:
@@ -191,22 +192,23 @@ class VectorSearchService:
             # Convert embedding to PostgreSQL vector string format
             embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
             
-            # Build query with bindparam for explicit parameter declaration
-            query_parts = ["""
+            # Build query - embed the vector string directly in SQL
+            # Since we're using string substitution for the vector, don't bind it as a parameter
+            query_parts = [f"""
                 SELECT 
                     id, sku_id, title, description, category, sub_category,
                     brand_name, product_type, gender, colorways, lowest_price,
                     featured_image, pdp_url, wishlist_num, tags,
-                    1 - (visual_embedding <=> :embedding::vector) as similarity_score
+                    1 - (visual_embedding <=> '{embedding_str}'::vector) as similarity_score
                 FROM store_items
                 WHERE visual_embedding IS NOT NULL
             """]
             
-            # Prepare bindparams list
-            bindparams_list = [bindparam("embedding"), bindparam("top_k")]
+            # Prepare bindparams list (without embedding since it's in the query string)
+            bindparams_list = [bindparam("top_k")]
             
-            # Use dictionary for parameters
-            params = {"embedding": embedding_str, "top_k": top_k}
+            # Use dictionary for parameters (without embedding)
+            params = {"top_k": top_k}
             
             # Add filters with named parameters
             if filters:
@@ -562,10 +564,14 @@ class HybridSearchService:
             if query_embedding is None or len(query_embedding) == 0:
                 raise ValueError("Failed to generate image embedding")
             
+            logger.info(f"[Hybrid Search] Visual embedding dimension: {len(query_embedding)}")
+            
             # Step 2: Perform visual search
             visual_results = await self.vector_search.search_by_visual_embedding(
                 db, query_embedding, top_k * 2, filters
             )
+            
+            logger.info(f"[Hybrid Search] Visual search results: {len(visual_results)}")
             
             # Step 3: Analyze image content
             image_analysis = self._analyze_image_content(visual_results[:5])
