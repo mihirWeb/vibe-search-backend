@@ -71,7 +71,7 @@ def get_yolo_model():
     
     if _yolo_model is None:
         print("[Image Processing] Loading YOLO model...")
-        _yolo_model = YOLO('yolov8n-fashion.pt')  # Using YOLOv8 nano for efficiency
+        _yolo_model = YOLO('yolov8n.pt')  # Using YOLOv8 nano for efficiency
         print("[Image Processing] YOLO model loaded successfully")
     
     return _yolo_model
