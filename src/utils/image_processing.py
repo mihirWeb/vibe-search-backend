@@ -7,6 +7,7 @@ import re
 import torch
 import requests
 import numpy as np
+import base64
 from PIL import Image
 from sklearn.cluster import KMeans
 from sentence_transformers import SentenceTransformer
@@ -77,18 +78,51 @@ def get_yolo_model():
 
 
 def download_image(url: str) -> Image.Image:
-    """Download an image from a URL and return as PIL Image"""
-    print(f"[Image Processing] Downloading image from: {url}")
-    response = requests.get(url, stream=True, timeout=30)
-    if response.status_code == 200:
-        image = Image.open(io.BytesIO(response.content))
-        # Convert to RGB if necessary
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        print(f"[Image Processing] Image downloaded successfully. Size: {image.size}")
-        return image
+    """Download an image from a URL or Data URL and return as PIL Image"""
+    print(f"[Image Processing] Processing image from: {url[:50]}...")
+    
+    # Check if it's a Data URL
+    if url.startswith('data:image'):
+        print("[Image Processing] Detected Data URL, decoding base64...")
+        
+        # Extract the base64 part
+        # Format: data:image/[format];base64,[data]
+        try:
+            # Split on comma to separate header from data
+            header, encoded = url.split(',', 1)
+            
+            # Decode base64
+            image_data = base64.b64decode(encoded)
+            
+            # Create PIL Image from decoded data
+            image = Image.open(io.BytesIO(image_data))
+            
+            # Convert to RGB if necessary
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+                
+            print(f"[Image Processing] Data URL decoded successfully. Size: {image.size}")
+            return image
+            
+        except Exception as e:
+            raise Exception(f"Failed to decode Data URL: {str(e)}")
+    
     else:
-        raise Exception(f"Failed to download image from {url}, status code: {response.status_code}")
+        # Handle regular HTTP/HTTPS URL
+        print("[Image Processing] Detected regular URL, downloading...")
+        try:
+            response = requests.get(url, stream=True, timeout=30)
+            if response.status_code == 200:
+                image = Image.open(io.BytesIO(response.content))
+                # Convert to RGB if necessary
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                print(f"[Image Processing] Image downloaded successfully. Size: {image.size}")
+                return image
+            else:
+                raise Exception(f"Failed to download image from {url}, status code: {response.status_code}")
+        except Exception as e:
+            raise Exception(f"Failed to download image from {url}: {str(e)}")
 
 
 def extract_metadata_from_caption(caption: str) -> Dict:

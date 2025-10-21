@@ -93,6 +93,34 @@ class ProductSchema(BaseModel):
         from_attributes = True
 
 
+class PaginationMeta(BaseModel):
+    """Pagination metadata"""
+    current_page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+    has_next: bool
+    has_previous: bool
+
+
+class ProductPaginationRequest(BaseModel):
+    """Request schema for paginated product list"""
+    page: int = Field(default=1, ge=1, description="Page number (starts from 1)")
+    page_size: int = Field(default=20, ge=1, le=100, description="Number of items per page")
+    brand: Optional[str] = Field(default=None, description="Filter by brand")
+    category: Optional[str] = Field(default=None, description="Filter by category")
+    sort_by: Optional[str] = Field(default="created_at", description="Sort field (created_at, name, brand)")
+    sort_order: Optional[str] = Field(default="desc", description="Sort order (asc or desc)")
+
+
+class ProductPaginatedResponse(BaseModel):
+    """Response schema for paginated product list"""
+    success: bool
+    message: str
+    products: List[ProductSchemaMinimal] = []
+    pagination: PaginationMeta
+
+
 class ExtractProductRequest(BaseModel):
     """Request schema for extracting product from Instagram post"""
     instagram_post_id: str = Field(..., description="Instagram post ID")

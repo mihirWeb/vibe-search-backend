@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.schemas.store_item_schema import (
     ImportStoreItemsRequest,
     ImportStoreItemsResponse,
-    StoreItemListResponse
+    StoreItemListResponse,
+    StoreItemPaginationRequest,
+    StoreItemPaginatedResponse
 )
 from src.controller.store_item_controller import StoreItemController
 from src.config.database import get_db
@@ -64,6 +66,92 @@ async def import_store_items_from_csv(
     """
     try:
         return await controller.import_items_from_csv(request)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error: {str(e)}"
+        )
+        
+@router.post("/list", response_model=StoreItemPaginatedResponse)
+async def get_store_items_paginated(
+    request: StoreItemPaginationRequest,
+    controller: StoreItemController = Depends(get_store_item_controller)
+) -> StoreItemPaginatedResponse:
+    """
+    Get paginated list of store items with filtering and sorting.
+    
+    **Features:**
+    - Pagination with customizable page size
+    - Multi-field filtering (category, brand, gender, product type, price)
+    - Text search across title, description, and tags
+    - Sorting by any field (default: created_at desc)
+    
+    **Filters:**
+    - `category`: Filter by one or more categories
+    - `brand_name`: Filter by one or more brand names
+    - `product_type`: Filter by one or more product types
+    - `gender`: Filter by gender (male, female, unisex)
+    - `min_price`, `max_price`: Filter by price range
+    - `search_query`: Search text in title, description, and tags
+    
+    **Sorting:**
+    - `sort_by`: Field to sort by (e.g., "lowest_price", "wishlist_num", "created_at")
+    - `sort_order`: "asc" or "desc"
+    
+    **Example Request:**
+    ```json
+    {
+        "page": 1,
+        "page_size": 20,
+        "filters": {
+            "category": ["Apparel", "Footwear"],
+            "brand_name": ["Nike", "Adidas"],
+            "gender": ["male"],
+            "min_price": 50,
+            "max_price": 200,
+            "search_query": "running"
+        },
+        "sort_by": "lowest_price",
+        "sort_order": "asc"
+    }
+    ```
+    
+    **Returns:**
+    - Paginated list of store items
+    - Pagination metadata (total pages, current page, etc.)
+    - Applied filters information
+    """
+    try:
+        return await controller.get_paginated_items(request)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error: {str(e)}"
+        )
+
+
+@router.get("/filter-options")
+async def get_filter_options(
+    controller: StoreItemController = Depends(get_store_item_controller)
+):
+    """
+    Get available filter options for store items.
+    
+    Returns all possible values for:
+    - Categories (from enum)
+    - Product types (from enum)
+    - Genders (from enum)
+    - Brand names (from database)
+    - Price range (min/max from database)
+    
+    Use this endpoint to populate filter dropdowns in your frontend.
+    """
+    try:
+        return await controller.get_filter_options()
     except HTTPException:
         raise
     except Exception as e:

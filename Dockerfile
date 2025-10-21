@@ -75,7 +75,8 @@ RUN pip install --no-cache-dir --default-timeout=100 \
     apify-client \
     instaloader \
     playwright \
-    python-multipart
+    python-multipart \
+    httpx
 
 # Copy application code
 COPY . .

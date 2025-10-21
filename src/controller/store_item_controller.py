@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 import os
+import math
 
 from src.services.store_item_service import StoreItemCSVService
 from src.repository.store_item_repository import StoreItemRepository
@@ -15,7 +16,11 @@ from src.schemas.store_item_schema import (
     ImportStoreItemsRequest,
     ImportStoreItemsResponse,
     StoreItemListResponse,
-    StoreItemMinimalSchema
+    StoreItemMinimalSchema,
+    StoreItemPaginationRequest,
+    StoreItemPaginatedResponse,
+    StoreItemDetailSchema,
+    PaginationMeta
 )
 
 
@@ -157,6 +162,126 @@ class StoreItemController:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error fetching recent items: {str(e)}"
             )
+            
+    async def get_paginated_items(
+        self, 
+        request: StoreItemPaginationRequest
+    ) -> StoreItemPaginatedResponse:
+        """Get paginated store items with filters"""
+        try:
+            print(f"[Store Item Controller] Fetching page {request.page} with size {request.page_size}")
+            
+            # Convert filters to dict
+            filters = None
+            if request.filters:
+                filters = {
+                    k: v for k, v in request.filters.dict().items() 
+                    if v is not None and v != [] and v != ""
+                }
+            
+            # Get items and total count
+            items, total_count = await self.repository.get_paginated_items(
+                page=request.page,
+                page_size=request.page_size,
+                filters=filters,
+                sort_by=request.sort_by,
+                sort_order=request.sort_order
+            )
+            
+            # Convert to schemas
+            item_schemas = [self._to_detail_schema(item) for item in items]
+            
+            # Calculate pagination metadata
+            total_pages = math.ceil(total_count / request.page_size) if total_count > 0 else 0
+            
+            pagination_meta = PaginationMeta(
+                current_page=request.page,
+                page_size=request.page_size,
+                total_items=total_count,
+                total_pages=total_pages,
+                has_next=request.page < total_pages,
+                has_previous=request.page > 1
+            )
+            
+            response = StoreItemPaginatedResponse(
+                success=True,
+                message=f"Retrieved {len(items)} items (page {request.page} of {total_pages})",
+                items=item_schemas,
+                pagination=pagination_meta,
+                filters_applied=filters
+            )
+            
+            return response
+            
+        except Exception as e:
+            print(f"[Store Item Controller] Error fetching paginated items: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error fetching paginated items: {str(e)}"
+            )
+    
+    async def get_filter_options(self) -> dict:
+        """Get available filter options"""
+        try:
+            from src.constants.store_item_enums import (
+                get_all_categories,
+                get_all_product_types,
+                get_all_genders
+            )
+            
+            # Get unique brands from database
+            brands = await self.repository.get_unique_brands()
+            
+            # Get price range
+            price_range = await self.repository.get_price_range()
+            
+            return {
+                "categories": get_all_categories(),
+                "product_types": get_all_product_types(),
+                "genders": get_all_genders(),
+                "brands": brands,
+                "price_range": price_range
+            }
+            
+        except Exception as e:
+            print(f"[Store Item Controller] Error fetching filter options: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error fetching filter options: {str(e)}"
+            )
+    
+    def _to_detail_schema(self, store_item) -> StoreItemDetailSchema:
+        """Convert StoreItem model to detail schema"""
+        return StoreItemDetailSchema(
+            id=store_item.id,
+            sku_id=store_item.sku_id,
+            title=store_item.title,
+            slug=store_item.slug,
+            category=store_item.category,
+            sub_category=store_item.sub_category,
+            brand_name=store_item.brand_name,
+            product_type=store_item.product_type,
+            gender=store_item.gender,
+            colorways=store_item.colorways,
+            brand_sku=store_item.brand_sku,
+            model=store_item.model,
+            lowest_price=store_item.lowest_price,
+            description=store_item.description,
+            is_d2c=store_item.is_d2c,
+            is_active=store_item.is_active,
+            is_certificate_required=store_item.is_certificate_required,
+            featured_image=store_item.featured_image,
+            pdp_url=store_item.pdp_url,
+            quantity_left=store_item.quantity_left,
+            wishlist_num=store_item.wishlist_num,
+            stock_claimed_percent=store_item.stock_claimed_percent,
+            discount_percentage=store_item.discount_percentage,
+            note=store_item.note,
+            tags=store_item.tags,
+            release_date=store_item.release_date,
+            created_at=store_item.created_at,
+            updated_at=store_item.updated_at
+        )
     
     def _to_minimal_schema(self, store_item) -> StoreItemMinimalSchema:
         """Convert StoreItem model to minimal schema"""

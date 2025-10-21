@@ -62,7 +62,7 @@ async def search_by_text(
             rerank=request.rerank
         )
 
-        print("results:", results);
+        # print("results:", results);
 
         # Format matches
         formatted_matches = []

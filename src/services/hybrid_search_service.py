@@ -474,6 +474,8 @@ class HybridSearchService:
             # Step 1: Query understanding and expansion
             query_analysis = self.query_expander.expand_query(query)
             
+            logger.info(f"[Hybrid Search] Query analysis: {query_analysis}")
+            
             # Step 2: Generate query embedding
             query_embedding = generate_text_embedding(query)
             
@@ -482,7 +484,7 @@ class HybridSearchService:
                 query_embedding = query_embedding + [0.0] * (768 - len(query_embedding))
             query_embedding = query_embedding[:768]
             
-            logger.info(f"[Hybrid Search] Embedding dimension: {len(query_embedding)}")
+            # logger.info(f"[Hybrid Search] Embedding dimension: {len(query_embedding)}")
             
             # Step 3: Perform parallel searches
             semantic_task = self.vector_search.search_by_text_embedding(

@@ -3,9 +3,9 @@ Product repository for database operations on products and product items.
 Handles all database interactions following the async pattern.
 """
 
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, asc, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from datetime import datetime
@@ -55,9 +55,9 @@ class ProductRepository:
                     name=item_data["name"],
                     brand=item_data.get("brand"),
                     category=item_data["category"],
-                    sub_category=item_data.get("sub_category"),  # New field
+                    sub_category=item_data.get("sub_category"),
                     product_type=item_data["product_type"],
-                    gender=item_data.get("gender"),  # New field
+                    gender=item_data.get("gender"),
                     style=item_data["style"],
                     colors=item_data["colors"],
                     description=item_data["description"],
@@ -93,10 +93,9 @@ class ProductRepository:
         try:
             print(f"[Product Repository] Fetching product with ID: {product_id}")
 
-            # Use selectinload to eagerly fetch items relationship
             stmt = (
                 select(Product)
-                .options(selectinload(Product.items))  # Eagerly load items
+                .options(selectinload(Product.items))
                 .where(Product.id == product_id)
             )
             result = await self.db_session.execute(stmt)
@@ -113,6 +112,66 @@ class ProductRepository:
             print(f"[Product Repository] Error fetching product: {str(e)}")
             raise e
 
+    async def get_products_paginated(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        brand: Optional[str] = None,
+        category: Optional[str] = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc"
+    ) -> Tuple[List[Product], int]:
+        """
+        Get paginated products with optional filters.
+        Returns tuple of (products, total_count)
+        """
+        try:
+            print(f"[Product Repository] Fetching paginated products - Page: {page}, Size: {page_size}")
+
+            # Base query with eager loading of items
+            query = select(Product).options(selectinload(Product.items))
+
+            # Apply filters
+            if brand:
+                query = query.where(Product.brand == brand)
+                print(f"[Product Repository] Filtering by brand: {brand}")
+
+            if category:
+                query = query.where(Product.category == category)
+                print(f"[Product Repository] Filtering by category: {category}")
+
+            # Get total count
+            count_query = select(func.count()).select_from(Product)
+            if brand:
+                count_query = count_query.where(Product.brand == brand)
+            if category:
+                count_query = count_query.where(Product.category == category)
+            
+            count_result = await self.db_session.execute(count_query)
+            total_count = count_result.scalar()
+
+            # Apply sorting
+            sort_column = getattr(Product, sort_by, Product.created_at)
+            if sort_order.lower() == "asc":
+                query = query.order_by(asc(sort_column))
+            else:
+                query = query.order_by(desc(sort_column))
+
+            # Apply pagination
+            offset = (page - 1) * page_size
+            query = query.offset(offset).limit(page_size)
+
+            # Execute query
+            result = await self.db_session.execute(query)
+            products = result.scalars().all()
+
+            print(f"[Product Repository] Found {len(products)} products (Total: {total_count})")
+            return list(products), total_count
+
+        except Exception as e:
+            print(f"[Product Repository] Error fetching paginated products: {str(e)}")
+            raise e
+
     async def get_products_by_brand(self, brand: str, limit: int = 50) -> List[Product]:
         """Get products by brand with items eagerly loaded"""
         try:
@@ -120,7 +179,7 @@ class ProductRepository:
 
             stmt = (
                 select(Product)
-                .options(selectinload(Product.items))  # Eagerly load items
+                .options(selectinload(Product.items))
                 .where(Product.brand == brand)
                 .order_by(desc(Product.created_at))
                 .limit(limit)
@@ -142,7 +201,7 @@ class ProductRepository:
 
             stmt = (
                 select(Product)
-                .options(selectinload(Product.items))  # Eagerly load items
+                .options(selectinload(Product.items))
                 .order_by(desc(Product.created_at))
                 .limit(limit)
             )
