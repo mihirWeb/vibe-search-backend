@@ -273,3 +273,48 @@ class ProductRepository:
         except Exception as e:
             print(f"[Product Repository] Error in batch create: {str(e)}")
             raise e
+        
+
+    async def check_post_extracted(self, instagram_post_id: str) -> bool:
+        """Check if an Instagram post has already been extracted"""
+        try:
+            print(f"[Product Repository] Checking if post {instagram_post_id} is extracted")
+            
+            stmt = select(Product).where(
+                Product.meta_info['post_id'].astext == instagram_post_id
+            ).limit(1)
+            
+            result = await self.db_session.execute(stmt)
+            product = result.scalar_one_or_none()
+            
+            is_extracted = product is not None
+            print(f"[Product Repository] Post {instagram_post_id} extracted: {is_extracted}")
+            
+            return is_extracted
+
+        except Exception as e:
+            print(f"[Product Repository] Error checking post extraction: {str(e)}")
+            return False
+
+    async def get_product_by_post_id(self, instagram_post_id: str) -> Optional[Product]:
+        """Get product by Instagram post ID"""
+        try:
+            print(f"[Product Repository] Fetching product for post ID: {instagram_post_id}")
+            
+            stmt = select(Product).where(
+                Product.meta_info['post_id'].astext == instagram_post_id
+            ).options(selectinload(Product.items))
+            
+            result = await self.db_session.execute(stmt)
+            product = result.scalar_one_or_none()
+            
+            if product:
+                print(f"[Product Repository] Found product {product.id} for post {instagram_post_id}")
+            else:
+                print(f"[Product Repository] No product found for post {instagram_post_id}")
+            
+            return product
+
+        except Exception as e:
+            print(f"[Product Repository] Error fetching product by post ID: {str(e)}")
+            raise e

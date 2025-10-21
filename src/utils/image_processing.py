@@ -71,7 +71,7 @@ def get_yolo_model():
     
     if _yolo_model is None:
         print("[Image Processing] Loading YOLO model...")
-        _yolo_model = YOLO('yolov8n.pt')  # Using YOLOv8 nano for efficiency
+        _yolo_model = YOLO('yolov8n-fashion.pt')  # Using YOLOv8 nano for efficiency
         print("[Image Processing] YOLO model loaded successfully")
     
     return _yolo_model
@@ -298,7 +298,7 @@ def detect_items_with_yolo(image: Image.Image, expected_items: List[Dict] = None
     
     # Filter for clothing-related items
     clothing_classes = ["person", "man", "woman", "clothing", "shirt", "jacket", "dress", "coat", 
-                       "pants", "shorts", "skirt", "shoe", "boot", "hat", "bag", "sunglasses", "tie", "backpack"]
+                       "pants", "shorts", "skirt", "shoe", "boot", "hat", "bag", "sunglasses", "tie", "backpack", "shoes", "sneakers"]
     
     detected_items = []
     
@@ -308,6 +308,8 @@ def detect_items_with_yolo(image: Image.Image, expected_items: List[Dict] = None
             # Get class name
             cls = int(box.cls[0])
             cls_name = yolo_model.names[cls]
+            
+            print(f"[Image Processing] Detected class: {cls_name} with confidence {box.conf[0].item():.4f}")
             
             # Check if it's a clothing-related item
             if any(clothing in cls_name.lower() for clothing in clothing_classes):

@@ -241,6 +241,44 @@ class ProductController:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error fetching product: {str(e)}"
             )
+            
+    async def delete_product(self, product_id: int) -> Dict:
+        """Delete a product and its items"""
+        try:
+            print(f"[Product Controller] Deleting product with ID: {product_id}")
+            
+            # Check if product exists
+            product = await self.product_repository.get_product_by_id(product_id)
+            
+            if not product:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Product not found with ID: {product_id}"
+                )
+            
+            # Delete product (cascade will delete items)
+            deleted = await self.product_repository.delete_product(product_id)
+            
+            if not deleted:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to delete product"
+                )
+            
+            return {
+                "success": True,
+                "message": f"Successfully deleted product {product_id} and its items",
+                "product_id": product_id
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[Product Controller] Error deleting product: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error deleting product: {str(e)}"
+            )
     
     async def get_recent_products(self, limit: int = 50) -> ProductListResponse:
         """Get recent products with minimal schema (excludes embeddings)"""

@@ -4,6 +4,7 @@ from .scraping_route import router as scraping_router
 from .product_route import router as product_router
 from .store_item_route import router as store_item_router
 from .search_route import router as search_router
+from .instagram_post_routes import router as instagram_post_router
 
 # Main router that combines all route modules
 router = APIRouter()
@@ -14,6 +15,7 @@ router.include_router(scraping_router, prefix="/scraping", tags=["Scraping"])
 router.include_router(product_router, prefix="/products", tags=["Products"])
 router.include_router(store_item_router, prefix="/store-items", tags=["Store Items"])
 router.include_router(search_router, prefix="/search", tags=["Search"])
+router.include_router(instagram_post_router, prefix="/instagram", tags=["Instagram Posts"])
 
 # When you add more routes, include them here:
 # router.include_router(auth_router, prefix="/auth", tags=["Authentication"])

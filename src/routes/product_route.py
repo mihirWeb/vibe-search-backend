@@ -138,6 +138,19 @@ async def get_product_by_id(
     controller = ProductController(db)
     return await controller.get_product_by_id(product_id)
 
+@router.delete("/{product_id}", status_code=status.HTTP_200_OK)
+async def delete_product(
+    product_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Delete a product and its items.
+    
+    - **product_id**: Product ID to delete
+    """
+    controller = ProductController(db)
+    return await controller.delete_product(product_id)
+
 
 @router.get("/recent", response_model=ProductListResponse, status_code=status.HTTP_200_OK)
 async def get_recent_products(
