@@ -42,7 +42,8 @@ RUN pip install --no-cache-dir --default-timeout=100 \
     Pillow \
     "numpy<2.0.0" \
     scikit-learn \
-    opencv-python
+    opencv-python \
+    pandas
 
 # Stage 3: PyTorch CPU-only (CRITICAL - must be installed before transformers)
 RUN pip install --no-cache-dir --default-timeout=100 \
@@ -67,7 +68,7 @@ RUN pip install --no-cache-dir --default-timeout=100 \
 
 # Stage 6: YOLO
 RUN pip install --no-cache-dir --default-timeout=100 \
-    ultralytics==8.0.227
+    ultralytics>=8.0.0
 
 # Stage 7: Remaining dependencies
 RUN pip install --no-cache-dir --default-timeout=100 \
@@ -75,7 +76,8 @@ RUN pip install --no-cache-dir --default-timeout=100 \
     apify-client \
     instaloader \
     playwright \
-    python-multipart
+    python-multipart \
+    httpx
 
 # Copy application code
 COPY . .

@@ -7,6 +7,7 @@ import re
 import torch
 import requests
 import numpy as np
+import base64
 from PIL import Image
 from sklearn.cluster import KMeans
 from sentence_transformers import SentenceTransformer
@@ -70,25 +71,59 @@ def get_yolo_model():
     
     if _yolo_model is None:
         print("[Image Processing] Loading YOLO model...")
-        _yolo_model = YOLO('yolov8n.pt')  # Using YOLOv8 nano for efficiency
+        # Using personal trained model
+        _yolo_model = YOLO('vsb2yolo8m.pt');
         print("[Image Processing] YOLO model loaded successfully")
     
     return _yolo_model
 
 
 def download_image(url: str) -> Image.Image:
-    """Download an image from a URL and return as PIL Image"""
-    print(f"[Image Processing] Downloading image from: {url}")
-    response = requests.get(url, stream=True, timeout=30)
-    if response.status_code == 200:
-        image = Image.open(io.BytesIO(response.content))
-        # Convert to RGB if necessary
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        print(f"[Image Processing] Image downloaded successfully. Size: {image.size}")
-        return image
+    """Download an image from a URL or Data URL and return as PIL Image"""
+    print(f"[Image Processing] Processing image from: {url[:50]}...")
+    
+    # Check if it's a Data URL
+    if url.startswith('data:image'):
+        print("[Image Processing] Detected Data URL, decoding base64...")
+        
+        # Extract the base64 part
+        # Format: data:image/[format];base64,[data]
+        try:
+            # Split on comma to separate header from data
+            header, encoded = url.split(',', 1)
+            
+            # Decode base64
+            image_data = base64.b64decode(encoded)
+            
+            # Create PIL Image from decoded data
+            image = Image.open(io.BytesIO(image_data))
+            
+            # Convert to RGB if necessary
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+                
+            print(f"[Image Processing] Data URL decoded successfully. Size: {image.size}")
+            return image
+            
+        except Exception as e:
+            raise Exception(f"Failed to decode Data URL: {str(e)}")
+    
     else:
-        raise Exception(f"Failed to download image from {url}, status code: {response.status_code}")
+        # Handle regular HTTP/HTTPS URL
+        print("[Image Processing] Detected regular URL, downloading...")
+        try:
+            response = requests.get(url, stream=True, timeout=30)
+            if response.status_code == 200:
+                image = Image.open(io.BytesIO(response.content))
+                # Convert to RGB if necessary
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                print(f"[Image Processing] Image downloaded successfully. Size: {image.size}")
+                return image
+            else:
+                raise Exception(f"Failed to download image from {url}, status code: {response.status_code}")
+        except Exception as e:
+            raise Exception(f"Failed to download image from {url}: {str(e)}")
 
 
 def extract_metadata_from_caption(caption: str) -> Dict:
@@ -262,10 +297,8 @@ def detect_items_with_yolo(image: Image.Image, expected_items: List[Dict] = None
     # Run YOLO inference
     results = yolo_model(image_np, verbose=False)
     
-    # Filter for clothing-related items
-    clothing_classes = ["person", "man", "woman", "clothing", "shirt", "jacket", "dress", "coat", 
-                       "pants", "shorts", "skirt", "shoe", "boot", "hat", "bag", "sunglasses", "tie", "backpack"]
-    
+    # The pre-trained fashion model already detects only fashion items
+    # No need to filter by clothing_classes as the model is specialized
     detected_items = []
     
     for result in results:
@@ -275,19 +308,19 @@ def detect_items_with_yolo(image: Image.Image, expected_items: List[Dict] = None
             cls = int(box.cls[0])
             cls_name = yolo_model.names[cls]
             
-            # Check if it's a clothing-related item
-            if any(clothing in cls_name.lower() for clothing in clothing_classes):
-                # Get bounding box coordinates
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                confidence = box.conf[0].item()
-                
-                detected_items.append({
-                    "label": cls_name,
-                    "box": [x1, y1, x2, y2],
-                    "score": confidence
-                })
+            print(f"[Image Processing] Detected class: {cls_name} with confidence {box.conf[0].item():.4f}")
+            
+            # Get bounding box coordinates
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            confidence = box.conf[0].item()
+            
+            detected_items.append({
+                "label": cls_name,
+                "box": [x1, y1, x2, y2],
+                "score": confidence
+            })
     
-    print(f"[Image Processing] Detected {len(detected_items)} clothing-related items")
+    print(f"[Image Processing] Detected {len(detected_items)} fashion-related items")
     
     # If we have expected items from caption, try to match them with detections
     if expected_items:

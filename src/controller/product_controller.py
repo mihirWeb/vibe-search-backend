@@ -7,6 +7,7 @@ from typing import List, Optional, Dict
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
+import math
 
 from src.services.product_extraction_service import ProductExtractionService
 from src.repository.product_repository import ProductRepository
@@ -20,7 +21,10 @@ from src.schemas.product_schema import (
     ProductSchema,
     ProductSchemaMinimal,
     ProductItemSchema,
-    ProductItemMinimalSchema
+    ProductItemMinimalSchema,
+    ProductPaginationRequest,
+    ProductPaginatedResponse,
+    PaginationMeta
 )
 
 
@@ -33,6 +37,69 @@ class ProductController:
         self.product_repository = ProductRepository(db_session)
         self.instagram_repository = InstagramPostRepository(db_session)
         print("[Product Controller] Initialized")
+    
+    async def get_paginated_products(
+        self,
+        request: ProductPaginationRequest
+    ) -> ProductPaginatedResponse:
+        """
+        Get paginated list of products with their items using minimal schemas.
+        Supports filtering by brand and category, and sorting.
+        """
+        try:
+            print(f"[Product Controller] Fetching paginated products - Page: {request.page}, Size: {request.page_size}")
+            
+            # Fetch products and total count from repository
+            products, total_count = await self.product_repository.get_products_paginated(
+                page=request.page,
+                page_size=request.page_size,
+                brand=request.brand,
+                category=request.category,
+                sort_by=request.sort_by,
+                sort_order=request.sort_order
+            )
+            
+            # Convert to minimal schemas
+            product_schemas = [self._product_model_to_minimal_schema(p) for p in products]
+            
+            # Calculate pagination metadata
+            total_pages = math.ceil(total_count / request.page_size) if total_count > 0 else 0
+            
+            pagination_meta = PaginationMeta(
+                current_page=request.page,
+                page_size=request.page_size,
+                total_items=total_count,
+                total_pages=total_pages,
+                has_next=request.page < total_pages,
+                has_previous=request.page > 1
+            )
+            
+            # Build response message
+            filters_applied = []
+            if request.brand:
+                filters_applied.append(f"brand={request.brand}")
+            if request.category:
+                filters_applied.append(f"category={request.category}")
+            
+            filter_msg = f" with filters: {', '.join(filters_applied)}" if filters_applied else ""
+            message = f"Retrieved {len(products)} products (page {request.page} of {total_pages}){filter_msg}"
+            
+            response = ProductPaginatedResponse(
+                success=True,
+                message=message,
+                products=product_schemas,
+                pagination=pagination_meta
+            )
+            
+            print(f"[Product Controller] Successfully fetched {len(products)} products")
+            return response
+            
+        except Exception as e:
+            print(f"[Product Controller] Error fetching paginated products: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error fetching paginated products: {str(e)}"
+            )
     
     async def extract_product_from_instagram_post(
         self, 
@@ -174,6 +241,44 @@ class ProductController:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error fetching product: {str(e)}"
             )
+            
+    async def delete_product(self, product_id: int) -> Dict:
+        """Delete a product and its items"""
+        try:
+            print(f"[Product Controller] Deleting product with ID: {product_id}")
+            
+            # Check if product exists
+            product = await self.product_repository.get_product_by_id(product_id)
+            
+            if not product:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Product not found with ID: {product_id}"
+                )
+            
+            # Delete product (cascade will delete items)
+            deleted = await self.product_repository.delete_product(product_id)
+            
+            if not deleted:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to delete product"
+                )
+            
+            return {
+                "success": True,
+                "message": f"Successfully deleted product {product_id} and its items",
+                "product_id": product_id
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[Product Controller] Error deleting product: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error deleting product: {str(e)}"
+            )
     
     async def get_recent_products(self, limit: int = 50) -> ProductListResponse:
         """Get recent products with minimal schema (excludes embeddings)"""
@@ -253,7 +358,7 @@ class ProductController:
         """Convert Product model to ProductSchema (full schema)"""
         # Convert items to schemas
         item_schemas = []
-        if product.items:  # Check if items relationship is loaded
+        if product.items:
             for item in product.items:
                 item_schema = ProductItemSchema(
                     id=item.id,
@@ -261,9 +366,11 @@ class ProductController:
                     name=item.name,
                     brand=item.brand,
                     category=item.category,
+                    sub_category=item.sub_category,
+                    product_type=item.product_type,
+                    gender=item.gender,
                     style=item.style,
                     colors=item.colors,
-                    product_type=item.product_type,
                     description=item.description,
                     visual_features=item.visual_features,
                     embedding=item.embedding,
@@ -299,7 +406,7 @@ class ProductController:
         """Convert Product model to ProductSchemaMinimal (excludes embeddings)"""
         # Convert items to minimal schemas
         item_schemas = []
-        if product.items:  # Check if items relationship is loaded
+        if product.items:
             for item in product.items:
                 item_schema = ProductItemMinimalSchema(
                     id=item.id,
