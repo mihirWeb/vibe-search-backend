@@ -11,7 +11,9 @@ from src.schemas.store_item_schema import (
     ImportStoreItemsResponse,
     StoreItemListResponse,
     StoreItemPaginationRequest,
-    StoreItemPaginatedResponse
+    StoreItemPaginatedResponse,
+    FindSimilarItemsRequest,
+    FindSimilarItemsResponse
 )
 from src.controller.store_item_controller import StoreItemController
 from src.config.database import get_db
@@ -159,6 +161,21 @@ async def get_filter_options(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error: {str(e)}"
         )
+        
+@router.post("/similar-items", response_model=FindSimilarItemsResponse)
+async def find_similar_items(
+    request: FindSimilarItemsRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Find similar store items based on a product item's visual embedding.
+    
+    - **product_item_id**: ID of the product item to find similar items for
+    - **limit**: Maximum number of similar items to return (default: 10)
+    - **similarity_threshold**: Minimum similarity score (0-1, default: 0.7)
+    """
+    controller = StoreItemController(db)
+    return await controller.find_similar_items_by_product_item(request)
 
 
 @router.get("/", response_model=StoreItemListResponse)

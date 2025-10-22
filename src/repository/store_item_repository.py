@@ -5,7 +5,7 @@ Handles all database interactions for store items.
 
 from typing import List, Optional, Dict, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select, func, or_, and_, text, bindparam
 from sqlalchemy.exc import IntegrityError
 import math
 
@@ -19,6 +19,7 @@ class StoreItemRepository:
         self.db_session = db_session
         print("[Store Item Repository] Initialized")
 
+    # ...existing code...
     async def create_store_item(self, item_data: dict) -> Optional[StoreItem]:
         """Create a new store item"""
         try:
@@ -215,3 +216,189 @@ class StoreItemRepository:
         except Exception as e:
             print(f"[Store Item Repository] Error getting price range: {str(e)}")
             return {"min_price": None, "max_price": None}
+
+    async def find_similar_items_by_visual_embedding(
+        self,
+        visual_embedding: List[float],
+        limit: int = 10,
+        similarity_threshold: float = 0.7
+    ) -> List[Tuple[StoreItem, float]]:
+        """
+        Find similar store items based on visual embedding using cosine similarity.
+        Returns list of tuples (StoreItem, similarity_score)
+        """
+        try:
+            print(f"[Store Item Repository] Finding similar items with limit {limit}")
+            print(f"[Store Item Repository] Query embedding dimension: {len(visual_embedding)}")
+            print(f"[Store Item Repository] Similarity threshold: {similarity_threshold}")
+            
+            # First, check what embeddings exist in the database
+            check_query = text("""
+                SELECT 
+                    COUNT(*) as total_items,
+                    COUNT(visual_embedding) as items_with_embeddings,
+                    COUNT(CASE WHEN visual_embedding IS NOT NULL THEN 1 END) as non_null_embeddings
+                FROM store_items
+            """)
+            
+            check_result = await self.db_session.execute(check_query)
+            stats = check_result.fetchone()
+            print(f"[Store Item Repository] Database stats: Total={stats.total_items}, With embeddings={stats.items_with_embeddings}")
+            
+            # Check embedding dimensions in database
+            dim_query = text("""
+                SELECT vector_dims(visual_embedding) as dims
+                FROM store_items
+                WHERE visual_embedding IS NOT NULL
+                LIMIT 1
+            """)
+            
+            try:
+                dim_result = await self.db_session.execute(dim_query)
+                dim_row = dim_result.fetchone()
+                if dim_row:
+                    print(f"[Store Item Repository] Database embedding dimension: {dim_row.dims}")
+            except Exception as dim_error:
+                print(f"[Store Item Repository] Could not check embedding dimension: {dim_error}")
+            
+            # Convert embedding to string format for pgvector
+            embedding_str = "[" + ",".join(map(str, visual_embedding)) + "]"
+            
+            # Try without threshold first to see if there are ANY matches
+            test_query_sql = f"""
+                SELECT 
+                    COUNT(*) as match_count,
+                    MIN(1 - (visual_embedding <=> '{embedding_str}'::vector)) as min_similarity,
+                    MAX(1 - (visual_embedding <=> '{embedding_str}'::vector)) as max_similarity,
+                    AVG(1 - (visual_embedding <=> '{embedding_str}'::vector)) as avg_similarity
+                FROM store_items
+                WHERE visual_embedding IS NOT NULL
+            """
+            
+            test_stmt = text(test_query_sql)
+            test_result = await self.db_session.execute(test_stmt)
+            test_row = test_result.fetchone()
+            
+            if test_row and test_row.match_count > 0:
+                # Format safely with None checks
+                min_sim = f"{test_row.min_similarity:.4f}" if test_row.min_similarity is not None else "N/A"
+                max_sim = f"{test_row.max_similarity:.4f}" if test_row.max_similarity is not None else "N/A"
+                avg_sim = f"{test_row.avg_similarity:.4f}" if test_row.avg_similarity is not None else "N/A"
+                
+                print(f"[Store Item Repository] Similarity stats: Count={test_row.match_count}, "
+                      f"Min={min_sim}, Max={max_sim}, Avg={avg_sim}")
+                
+                # Dynamically adjust threshold if max similarity is below requested threshold
+                if test_row.max_similarity is not None and test_row.max_similarity < similarity_threshold:
+                    adjusted_threshold = max(0.0, test_row.max_similarity - 0.1)  # Use 90% of max similarity
+                    print(f"[Store Item Repository] WARNING: Max similarity ({test_row.max_similarity:.4f}) is below threshold ({similarity_threshold:.4f})")
+                    print(f"[Store Item Repository] Adjusting threshold to {adjusted_threshold:.4f} to return results")
+                    similarity_threshold = adjusted_threshold
+            else:
+                print(f"[Store Item Repository] WARNING: No items with embeddings found or similarity calculation failed")
+            
+            # Build actual query - remove threshold constraint if it's too restrictive
+            if similarity_threshold <= 0:
+                # No threshold - just return top K by similarity
+                query_sql = f"""
+                    SELECT 
+                        id, sku_id, title, slug, category, sub_category,
+                        brand_name, product_type, gender, colorways, brand_sku, model,
+                        lowest_price, description, is_d2c, is_active, is_certificate_required,
+                        featured_image, pdp_url, quantity_left, wishlist_num, 
+                        stock_claimed_percent, discount_percentage, note, tags,
+                        release_date, csv_created_at, csv_updated_at, created_at, updated_at,
+                        1 - (visual_embedding <=> '{embedding_str}'::vector) as similarity
+                    FROM store_items
+                    WHERE visual_embedding IS NOT NULL
+                    ORDER BY visual_embedding <=> '{embedding_str}'::vector
+                    LIMIT :limit
+                """
+                stmt = text(query_sql).bindparams(bindparam("limit"))
+                params = {"limit": limit}
+            else:
+                # With threshold
+                query_sql = f"""
+                    SELECT 
+                        id, sku_id, title, slug, category, sub_category,
+                        brand_name, product_type, gender, colorways, brand_sku, model,
+                        lowest_price, description, is_d2c, is_active, is_certificate_required,
+                        featured_image, pdp_url, quantity_left, wishlist_num, 
+                        stock_claimed_percent, discount_percentage, note, tags,
+                        release_date, csv_created_at, csv_updated_at, created_at, updated_at,
+                        1 - (visual_embedding <=> '{embedding_str}'::vector) as similarity
+                    FROM store_items
+                    WHERE visual_embedding IS NOT NULL
+                      AND 1 - (visual_embedding <=> '{embedding_str}'::vector) >= :threshold
+                    ORDER BY visual_embedding <=> '{embedding_str}'::vector
+                    LIMIT :limit
+                """
+                stmt = text(query_sql).bindparams(
+                    bindparam("threshold"),
+                    bindparam("limit")
+                )
+                params = {
+                    "threshold": similarity_threshold,
+                    "limit": limit
+                }
+            
+            # Execute with parameters
+            result = await self.db_session.execute(stmt, params)
+            
+            rows = result.fetchall()
+            
+            # Convert rows to StoreItem objects with similarity scores
+            similar_items = []
+            for row in rows:
+                # Access row fields by name
+                item = StoreItem(
+                    id=row.id,
+                    sku_id=row.sku_id,
+                    title=row.title,
+                    slug=row.slug,
+                    category=row.category,
+                    sub_category=row.sub_category,
+                    brand_name=row.brand_name,
+                    product_type=row.product_type,
+                    gender=row.gender,
+                    colorways=row.colorways,
+                    brand_sku=row.brand_sku,
+                    model=row.model,
+                    lowest_price=row.lowest_price,
+                    description=row.description,
+                    is_d2c=row.is_d2c,
+                    is_active=row.is_active,
+                    is_certificate_required=row.is_certificate_required,
+                    featured_image=row.featured_image,
+                    pdp_url=row.pdp_url,
+                    quantity_left=row.quantity_left,
+                    wishlist_num=row.wishlist_num,
+                    stock_claimed_percent=row.stock_claimed_percent,
+                    discount_percentage=row.discount_percentage,
+                    note=row.note,
+                    tags=row.tags,
+                    release_date=row.release_date,
+                    csv_created_at=row.csv_created_at,
+                    csv_updated_at=row.csv_updated_at,
+                    created_at=row.created_at,
+                    updated_at=row.updated_at
+                )
+                
+                similarity_score = float(row.similarity)
+                similar_items.append((item, similarity_score))
+            
+            print(f"[Store Item Repository] Found {len(similar_items)} similar items (threshold: {similarity_threshold:.4f})")
+            
+            if len(similar_items) == 0:
+                print(f"[Store Item Repository] WARNING: No items found. This might indicate:")
+                print(f"  - Different embedding models used for product_items vs store_items")
+                print(f"  - Embeddings not normalized")
+                print(f"  - Query embedding has issues")
+            
+            return similar_items
+            
+        except Exception as e:
+            print(f"[Store Item Repository] Error finding similar items: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise e

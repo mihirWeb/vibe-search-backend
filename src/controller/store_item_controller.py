@@ -20,7 +20,10 @@ from src.schemas.store_item_schema import (
     StoreItemPaginationRequest,
     StoreItemPaginatedResponse,
     StoreItemDetailSchema,
-    PaginationMeta
+    PaginationMeta,
+    FindSimilarItemsRequest,
+    FindSimilarItemsResponse,
+    SimilarStoreItemSchema
 )
 
 
@@ -295,3 +298,86 @@ class StoreItemController:
             lowest_price=store_item.lowest_price,
             pdp_url=store_item.pdp_url
         )
+        
+
+    async def find_similar_items_by_product_item(
+        self,
+        request: FindSimilarItemsRequest
+    ) -> FindSimilarItemsResponse:
+        """Find similar store items based on product item's visual embedding"""
+        try:
+            print(f"[Store Item Controller] Finding similar items for product item {request.product_item_id}")
+            
+            # Get product item from product repository
+            from src.repository.product_repository import ProductRepository
+            product_repo = ProductRepository(self.db_session)
+            
+            # Get product item by ID
+            from sqlalchemy import select
+            from src.models.product_item_model import ProductItem
+            
+            stmt = select(ProductItem).where(ProductItem.id == request.product_item_id)
+            result = await self.db_session.execute(stmt)
+            product_item = result.scalar_one_or_none()
+            
+            if not product_item:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Product item not found with ID: {request.product_item_id}"
+                )
+            
+            # Check if product item has visual embedding
+            # Fix: Check for None first, then check length
+            if product_item.embedding is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Product item {request.product_item_id} does not have a visual embedding"
+                )
+            
+            # Convert to list if it's a numpy array or similar
+            embedding_list = list(product_item.embedding)
+            
+            if len(embedding_list) == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Product item {request.product_item_id} has an empty visual embedding"
+                )
+            
+            print(f"[Store Item Controller] Product item embedding dimension: {len(embedding_list)}")
+            
+            # Find similar store items
+            similar_items_with_scores = await self.repository.find_similar_items_by_visual_embedding(
+                visual_embedding=embedding_list,
+                limit=request.limit,
+                similarity_threshold=request.similarity_threshold
+            )
+            
+            # Convert to response schemas
+            similar_item_schemas = [
+                SimilarStoreItemSchema(
+                    item=self._to_detail_schema(item),
+                    similarity_score=round(score, 4)
+                )
+                for item, score in similar_items_with_scores
+            ]
+            
+            response = FindSimilarItemsResponse(
+                success=True,
+                message=f"Found {len(similar_item_schemas)} similar items",
+                product_item_id=request.product_item_id,
+                total_similar_items=len(similar_item_schemas),
+                similar_items=similar_item_schemas
+            )
+            
+            return response
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[Store Item Controller] Error finding similar items: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error finding similar items: {str(e)}"
+            )

@@ -159,3 +159,39 @@ class StoreItemPaginatedResponse(BaseModel):
     items: List[StoreItemDetailSchema]
     pagination: PaginationMeta
     filters_applied: Optional[dict] = None
+    
+class SimilarStoreItemSchema(BaseModel):
+    """Schema for similar store items with similarity score"""
+    item: StoreItemDetailSchema
+    similarity_score: float
+    
+    class Config:
+        from_attributes = True
+
+
+class FindSimilarItemsRequest(BaseModel):
+    """Request schema for finding similar items"""
+    product_item_id: int
+    limit: int = 10
+    similarity_threshold: float = 0.7
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "product_item_id": 123,
+                "limit": 10,
+                "similarity_threshold": 0.7
+            }
+        }
+
+
+class FindSimilarItemsResponse(BaseModel):
+    """Response schema for similar items"""
+    success: bool
+    message: str
+    product_item_id: int
+    total_similar_items: int
+    similar_items: List[SimilarStoreItemSchema]
+    
+    class Config:
+        from_attributes = True
