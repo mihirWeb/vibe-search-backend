@@ -457,8 +457,29 @@ class HybridSearchService:
         self.bm25_search = BM25SearchService()
         self.reranker = ReRanker()
         self.query_parser = QwenQueryParser()  # Add AI query parser
+        
+        # Comprehensive clothing items mapping
+        self.clothing_items = {
+            "men": {
+                "top": ["t-shirt", "polo shirt", "dress shirt", "casual shirt", "hoodie", "sweatshirt", "sweater", "vest", "jacket", "blazer", "coat", "tank top", "henley", "flannel shirt"],
+                "bottom": ["jeans", "trousers", "chinos", "shorts", "sweatpants", "cargo pants", "khakis", "dress pants", "joggers", "track pants"],
+                "hat": ["baseball cap", "beanie", "fedora", "flat cap", "bucket hat", "beret", "trilby", "top hat", "newsboy cap"],
+                "shoes": ["sneakers", "dress shoes", "loafers", "boots", "sandals", "flip-flops", "oxfords", "brogues", "boat shoes", "slippers", "high-tops"],
+                "watch": ["analog watch", "digital watch", "smartwatch", "chronograph", "dive watch", "dress watch", "field watch", "pilot watch", "fitness tracker"],
+                "bag": ["backpack", "messenger bag", "briefcase", "duffel bag", "tote bag", "gym bag", "sling bag", "laptop bag", "waist bag"]
+            },
+            "women": {
+                "top": ["t-shirt", "blouse", "tank top", "crop top", "sweater", "hoodie", "cardigan", "camisole", "bodysuit", "peplum top", "tube top", "halter top", "off-shoulder top"],
+                "bottom": ["jeans", "trousers", "leggings", "skirt", "shorts", "culottes", "palazzo pants", "yoga pants", "jeggings", "capris", "skirt", "dress"],
+                "hat": ["baseball cap", "beanie", "fedora", "sun hat", "beret", "fascinator", "wide-brimmed hat", "cloche", "visor", "turban"],
+                "shoes": ["sneakers", "heels", "flats", "boots", "sandals", "wedges", "pumps", "stilettos", "platform shoes", "ballet flats", "mules", "espadrilles"],
+                "watch": ["analog watch", "digital watch", "smartwatch", "bracelet watch", "pendant watch", "dress watch", "sport watch", "fitness tracker", "charm watch"],
+                "bag": ["handbag", "clutch", "tote bag", "backpack", "crossbody bag", "shoulder bag", "hobo bag", "satchel", "bucket bag", "purse", "wristlet", "evening bag"]
+            }
+        }
+                
         print("[Hybrid Search Service] Initialized")
-    
+
     async def search_by_text(
         self, 
         db: AsyncSession, 
@@ -507,15 +528,19 @@ class HybridSearchService:
             
             print(f"[Hybrid Search] Query analysis: {query_analysis}")
             
-            # Step 4: Generate query embedding from refined query
-            query_embedding = generate_text_embedding(refined_query)
+            # Step 4: Build enriched query text with filter values for embedding generation
+            enriched_query_text = self._build_enriched_query(refined_query, merged_filters, ai_filters)
+            print(f"[Hybrid Search] Enriched query for embedding: {enriched_query_text}")
+            
+            # Step 5: Generate query embedding from enriched query text
+            query_embedding = generate_text_embedding(enriched_query_text)
             
             # Pad to 768 dimensions if needed
             if len(query_embedding) < 768:
                 query_embedding = query_embedding + [0.0] * (768 - len(query_embedding))
             query_embedding = query_embedding[:768]
             
-            # Step 5: Perform parallel searches with merged filters
+            # Step 6: Perform parallel searches with merged filters
             semantic_task = self.vector_search.search_by_text_embedding(
                 db, query_embedding, top_k * 2, merged_filters
             )
@@ -541,21 +566,21 @@ class HybridSearchService:
             else:
                 print(f"[Hybrid Search] Keyword results: {len(keyword_results)}")
             
-            # Step 6: Combine and deduplicate results
+            # Step 7: Combine and deduplicate results
             combined_results = self._combine_results(semantic_results, keyword_results)
             print(f"[Hybrid Search] Combined results: {len(combined_results)}")
             
-            # Step 7: Apply exclusion filters
+            # Step 8: Apply exclusion filters
             combined_results = self._apply_exclusion_filters(combined_results, ai_filters)
             print(f"[Hybrid Search] After exclusions: {len(combined_results)}")
             
-            # Step 8: Rerank if requested
+            # Step 9: Rerank if requested
             if rerank:
                 combined_results = self.reranker.rerank_results(
                     combined_results, query_analysis, mode="hybrid"
                 )
             
-            # Step 9: Format response
+            # Step 10: Format response
             search_time = (datetime.now() - start_time).total_seconds() * 1000
             
             return {
@@ -577,7 +602,135 @@ class HybridSearchService:
                 "total_results": 0,
                 "search_time_ms": 0
             }
- 
+
+    def _build_enriched_query(self, refined_query: str, merged_filters: Dict, ai_filters: Dict) -> str:
+        """
+        Build enriched query text by combining refined query with INCLUSION filter values.
+        Uses weighted query approach: 
+        - refined query (3x weight)
+        - filter values (3x weight each: brands, colors, gender, category)
+        - corresponding item type names (1x weight)
+        
+        Excludes exclusion filters (exclude_brands, exclude_colors, exclude_gender).
+        
+        Args:
+            refined_query: The refined query text
+            merged_filters: Merged filters from user and AI (only used for price_range)
+            ai_filters: AI-parsed filters (used for category, brands, colors, gender, type)
+            
+        Returns:
+            Enriched query string for embedding generation with weighted terms
+        """
+        query_parts = []
+        
+        # Step 1: Add refined query 3 times for weighting
+        query_parts.extend([refined_query] * 3)
+        
+        # Step 2: Add filter values 3 times each for weighting
+        if ai_filters:
+            # Add category filter values from AI (3x weight)
+            if ai_filters.get("category"):
+                categories = ai_filters["category"]
+                if isinstance(categories, list):
+                    category_str = " ".join(categories)
+                    query_parts.extend([category_str] * 3)
+                else:
+                    query_parts.extend([str(categories)] * 3)
+            
+            # Add brand filter values from AI (3x weight, INCLUSION only)
+            if ai_filters.get("brands"):
+                brands = ai_filters["brands"]
+                if isinstance(brands, list):
+                    brands_str = " ".join(brands)
+                    query_parts.extend([brands_str] * 3)
+                else:
+                    query_parts.extend([str(brands)] * 3)
+            
+            # Add color filter values from AI (3x weight, INCLUSION only)
+            if ai_filters.get("colors"):
+                colors = ai_filters["colors"]
+                if isinstance(colors, list):
+                    colors_str = " ".join(colors)
+                    query_parts.extend([colors_str] * 3)
+                else:
+                    query_parts.extend([str(colors)] * 3)
+            
+            # Add gender filter value from AI (3x weight, INCLUSION only)
+            if ai_filters.get("gender"):
+                query_parts.extend([str(ai_filters["gender"])] * 3)
+        
+        # Step 3: Add corresponding item type names based on gender and type (1x weight)
+        if ai_filters and ai_filters.get("type"):
+            item_types = ai_filters["type"]
+            gender = ai_filters.get("gender", "").lower()
+            
+            # Determine which gender mappings to use
+            if "men" in gender or "male" in gender:
+                gender_key = "men"
+                type_specific_items = self._get_type_specific_items([gender_key], item_types)
+                query_parts.extend(type_specific_items)
+            elif "women" in gender or "female" in gender:
+                gender_key = "women"
+                type_specific_items = self._get_type_specific_items([gender_key], item_types)
+                query_parts.extend(type_specific_items)
+            else:
+                # No gender specified - include both men and women items
+                type_specific_items = self._get_type_specific_items(["men", "women"], item_types)
+                query_parts.extend(type_specific_items)
+        
+        # Step 4: Add price range context from merged_filters (1x weight)
+        if merged_filters and merged_filters.get("price_range"):
+            price_range = merged_filters["price_range"]
+            if len(price_range) == 2:
+                min_price, max_price = price_range
+                if min_price == 0:
+                    query_parts.append(f"affordable under ${max_price}")
+                elif max_price >= 500:
+                    query_parts.append(f"premium over ${min_price}")
+                else:
+                    query_parts.append(f"mid-range ${min_price} to ${max_price}")
+        
+        # Join all parts with spaces
+        enriched_query = " ".join(filter(None, query_parts))
+        
+        print(f"[Build Enriched Query] Final enriched query: {enriched_query}")
+        
+        return enriched_query
+    
+    def _get_type_specific_items(self, genders: List[str], item_types: List[str]) -> List[str]:
+        """
+        Get clothing item names for specific genders and types.
+        
+        Args:
+            genders: List of genders ['men', 'women']
+            item_types: List of item types ['top', 'bottom', 'hat', 'shoes', 'watch', 'bag']
+            
+        Returns:
+            List of specific clothing item names
+        """
+        items = []
+        
+        for gender in genders:
+            if gender not in self.clothing_items:
+                continue
+            
+            for item_type in item_types:
+                if item_type not in self.clothing_items[gender]:
+                    continue
+                
+                # Get all items for this gender and type
+                type_items = self.clothing_items[gender][item_type]
+                items.extend(type_items)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_items = []
+        for item in items:
+            if item not in seen:
+                seen.add(item)
+                unique_items.append(item)
+        
+        return unique_items
  
     def _merge_filters(self, user_filters: Dict, ai_filters: Dict) -> Dict:
         """Merge user-provided filters with AI-parsed filters, handling None values properly"""
@@ -624,14 +777,49 @@ class HybridSearchService:
         
         exclude_brands = ai_filters.get("exclude_brands", [])
         exclude_colors = ai_filters.get("exclude_colors", [])
+        exclude_gender = ai_filters.get("exclude_gender", [])
         
         for result in results:
             should_exclude = False
+            
+            # Check gender exclusion with word boundary matching
+            if exclude_gender:
+                gender = result.get("gender")
+                title = result.get("title")
+                tags = result.get("tags")
+                
+                for excluded in exclude_gender:
+                    if not excluded:
+                        continue
+                    
+                    excluded_lower = excluded.lower()
+                    
+                    # Check in gender field
+                    if gender and self._contains_word(gender.lower(), excluded_lower):
+                        logger.debug(f"[Exclusion] Filtered out {result.get('title')} - excluded gender in gender field: {excluded}")
+                        should_exclude = True
+                        break
+                    
+                    # Check in title
+                    if title and self._contains_word(title.lower(), excluded_lower):
+                        logger.debug(f"[Exclusion] Filtered out {result.get('title')} - excluded gender in title: {excluded}")
+                        should_exclude = True
+                        break
+                    
+                    # Check in tags
+                    if tags and self._contains_word(tags.lower(), excluded_lower):
+                        logger.debug(f"[Exclusion] Filtered out {result.get('title')} - excluded gender in tags: {excluded}")
+                        should_exclude = True
+                        break
+            
+            if should_exclude:
+                continue
             
             # Check brand exclusion with word boundary matching
             if exclude_brands:
                 brand = result.get("brand_name")
                 title = result.get("title")
+                tags = result.get("tags")
                 
                 for excluded in exclude_brands:
                     if not excluded:
@@ -650,6 +838,12 @@ class HybridSearchService:
                         logger.debug(f"[Exclusion] Filtered out {result.get('title')} - excluded brand in title: {excluded}")
                         should_exclude = True
                         break
+                    
+                    # Check in tags
+                    if tags and self._contains_word(tags.lower(), excluded_lower):
+                        logger.debug(f"[Exclusion] Filtered out {result.get('title')} - excluded brand in tags: {excluded}")
+                        should_exclude = True
+                        break
             
             if should_exclude:
                 continue
@@ -658,6 +852,7 @@ class HybridSearchService:
             if exclude_colors:
                 colorways = result.get("colorways")
                 title = result.get("title")
+                tags = result.get("tags")
                 
                 for excluded in exclude_colors:
                     if not excluded:
@@ -674,6 +869,12 @@ class HybridSearchService:
                     # Check in title
                     if title and self._contains_word(title.lower(), excluded_lower):
                         logger.debug(f"[Exclusion] Filtered out {result.get('title')} - excluded color in title: {excluded}")
+                        should_exclude = True
+                        break
+                    
+                    # Check in tags
+                    if tags and self._contains_word(tags.lower(), excluded_lower):
+                        logger.debug(f"[Exclusion] Filtered out {result.get('title')} - excluded color in tags: {excluded}")
                         should_exclude = True
                         break
             

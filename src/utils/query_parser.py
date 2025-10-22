@@ -74,7 +74,7 @@ class QwenQueryParser:
         except Exception as e:
             logger.error(f"[Query Parser] Qwen API parsing failed: {e}")
             return self._fallback_parsing(query)
-    
+
     def _create_system_prompt(self) -> str:
         """Create the system prompt for the model"""
         return """You are a search query parser for a fashion e-commerce store. Your task is to convert natural language queries into structured search requests.
@@ -84,8 +84,10 @@ Instructions:
 2. Extract the ORIGINAL query as-is
 3. Create a REFINED query that removes excluded/negated terms and keeps only what the user WANTS
 4. Extract filters including exclusions (brands, colors, etc.)
-5. Respond with ONLY a valid JSON object
-6. Be precise and accurate in your parsing
+5. Identify the ITEM TYPE from: top, bottom, hat, shoes, watch, bag (can be multiple)
+6. For gender filters: If "men" or "male" is detected, automatically exclude "women" gender. If "women" or "female" is detected, automatically exclude "men" gender
+7. Respond with ONLY a valid JSON object
+8. Be precise and accurate in your parsing
 
 Respond with a JSON object in this exact format:
 {
@@ -98,16 +100,31 @@ Respond with a JSON object in this exact format:
         "colors": ["array of colors to INCLUDE or empty"],
         "exclude_colors": ["array of colors to EXCLUDE or empty"],
         "price_range": [min_price, max_price] or null,
-        "gender": "gender filter or null"
+        "gender": "gender filter or null (use 'Men' or 'Women')",
+        "exclude_gender": ["array of genders to EXCLUDE or empty (use 'Men' or 'Women')]",
+        "type": ["array of item types: 'top', 'bottom', 'hat', 'shoes', 'watch', 'bag' or empty"]
     },
     "top_k": 10,
     "explanation": "brief explanation of how you interpreted the query"
 }
 
+Item Type Detection Rules:
+- "top": t-shirt, shirt, blouse, hoodie, sweater, jacket, blazer, coat, cardigan, etc.
+- "bottom": jeans, pants, trousers, shorts, skirt, leggings, etc.
+- "hat": cap, beanie, fedora, hat, etc.
+- "shoes": sneakers, boots, sandals, heels, flats, etc.
+- "watch": watch, smartwatch, timepiece, etc.
+- "bag": bag, backpack, purse, tote, clutch, handbag, etc.
+
 Examples:
-- Query: "red sneakers but not nike" -> refined_query: "red sneakers", exclude_brands: ["Nike"]
-- Query: "black shirt without stripes" -> refined_query: "black shirt", exclude_colors: []
-- Query: "shoes under $100 not adidas" -> refined_query: "shoes", price_range: [0, 100], exclude_brands: ["Adidas"]"""
+- Query: "red sneakers but not nike" -> refined_query: "red sneakers", type: ["shoes"], exclude_brands: ["Nike"]
+- Query: "black shirt without stripes" -> refined_query: "black shirt", type: ["top"], exclude_colors: []
+- Query: "shoes under $100 not adidas" -> refined_query: "shoes", type: ["shoes"], price_range: [0, 100], exclude_brands: ["Adidas"]
+- Query: "running shoes for men" -> refined_query: "running shoes", type: ["shoes"], gender: "Men", exclude_gender: ["Women"]
+- Query: "women's dress" -> refined_query: "dress", type: ["top", "bottom"], gender: "Women", exclude_gender: ["Men"]
+- Query: "men sneakers not black" -> refined_query: "sneakers", type: ["shoes"], gender: "Men", exclude_gender: ["Women"], exclude_colors: ["black"]
+- Query: "backpack for travel" -> refined_query: "backpack travel", type: ["bag"], gender: null
+- Query: "casual t-shirt and jeans" -> refined_query: "casual t-shirt jeans", type: ["top", "bottom"], gender: null"""
     
     def _create_user_prompt(self, query: str, context: Optional[Dict]) -> str:
         """Create the user prompt with the query"""
@@ -195,6 +212,14 @@ Parse this query and respond with the JSON structure."""
             elif key == "price_range" and isinstance(value, list) and len(value) == 2:
                 if all(v is not None and isinstance(v, (int, float)) for v in value):
                     cleaned_filters[key] = value
+        
+        # Auto-add gender exclusions if gender filter is present
+        if "gender" in cleaned_filters and "exclude_gender" not in cleaned_filters:
+            gender = cleaned_filters["gender"].lower()
+            if "men" in gender or "male" in gender:
+                cleaned_filters["exclude_gender"] = ["Women"]
+            elif "women" in gender or "female" in gender:
+                cleaned_filters["exclude_gender"] = ["Men"]
         
         parsed["filters"] = cleaned_filters
         return parsed
