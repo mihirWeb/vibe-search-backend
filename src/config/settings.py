@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     IMAGE_PROCESSING_TIMEOUT: int = 30
     MAX_IMAGE_SIZE: int = 2048
     
+    # Hugging face secret key
+    HUGGINGFACE_TOKEN: str
+    
     class Config:
         env_file = ".env"  # This tells Pydantic to read from .env file
 

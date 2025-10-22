@@ -38,31 +38,31 @@ def clean_filters(filters):
 @router.post("/text", response_model=TextSearchResponse)
 async def search_by_text(
     request: TextSearchRequest,
+    use_ai_parser: bool = True,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Search for products using text query with semantic understanding.
+    Search for products using text query with AI-powered semantic understanding.
     
-    This endpoint uses natural language processing to understand the user's
-    query intent and finds relevant products using both semantic embeddings
-    and keyword matching.
+    This endpoint uses natural language processing and AI query parsing to understand 
+    the user's query intent, handle negations, and find relevant products using both 
+    semantic embeddings and keyword matching.
     """
     try:
         # Clean filters to remove None/empty values
         filters = clean_filters(request.filters)
         
-        logger.info(f"Text search query: {request.query}, filters: {filters}")
+        logger.info(f"Text search query: {request.query}, filters: {filters}, AI parser: {use_ai_parser}")
         
-        # Perform search
+        # Perform search with AI query parsing
         results = await search_service.search_by_text(
             db=db,
             query=request.query,
             top_k=request.top_k,
             filters=filters,
-            rerank=request.rerank
+            rerank=request.rerank,
+            use_ai_parser=use_ai_parser
         )
-
-        # print("results:", results);
 
         # Format matches
         formatted_matches = []
@@ -96,7 +96,6 @@ async def search_by_text(
     except Exception as e:
         logger.error(f"Text search failed: {e}")
         raise HTTPException(status_code=500, detail=f"Text search failed: {str(e)}")
-
 
 @router.post("/image", response_model=ImageSearchResponse)
 async def search_by_image(

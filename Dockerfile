@@ -77,7 +77,8 @@ RUN pip install --no-cache-dir --default-timeout=100 \
     instaloader \
     playwright \
     python-multipart \
-    httpx
+    httpx \
+    openai>=1.0.0
 
 # Copy application code
 COPY . .
