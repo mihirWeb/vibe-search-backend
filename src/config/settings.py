@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     
     # CORS  
-    ALLOWED_HOSTS: List[str] = ["http://localhost:3000"]
+    ALLOWED_HOSTS: List[str] = ["*"]
     
     # Environment
     ENVIRONMENT: str = "development"
