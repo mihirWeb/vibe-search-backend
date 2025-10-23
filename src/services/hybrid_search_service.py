@@ -343,6 +343,82 @@ class VectorSearchService:
         except Exception as e:
             logger.error(f"BM25 search without prefilter failed: {e}")
             return []
+        
+    async def search_by_visual_embedding(
+        self, 
+        db: AsyncSession, 
+        query_embedding: List[float],
+        top_k: int = 10, 
+        filters: Dict = None
+    ) -> List[Dict]:
+        """Search using visual embedding similarity with proper bindparam"""
+        try:
+            # Convert embedding to PostgreSQL vector string format
+            embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
+            
+            # Build query - embed the vector string directly in SQL
+            query_parts = [f"""
+                SELECT 
+                    id, sku_id, title, description, category, sub_category,
+                    brand_name, product_type, gender, colorways, lowest_price,
+                    featured_image, pdp_url, wishlist_num, tags,
+                    1 - (visual_embedding <=> '{embedding_str}'::vector) as similarity_score
+                FROM store_items
+                WHERE visual_embedding IS NOT NULL
+            """]
+            
+            bindparams_list = [bindparam("top_k")]
+            params = {"top_k": top_k}
+            
+            # Add filters
+            if filters:
+                if filters.get("category"):
+                    categories = filters["category"]
+                    category_conditions = []
+                    for i, cat in enumerate(categories):
+                        cat_param = f"cat_{i}"
+                        category_conditions.append(f"category ILIKE :{cat_param}")
+                        params[cat_param] = f"%{cat}%"
+                        bindparams_list.append(bindparam(cat_param))
+                    query_parts.append(f" AND ({' OR '.join(category_conditions)})")
+                
+                if filters.get("brands"):
+                    query_parts.append(" AND brand_name = ANY(:brands)")
+                    params["brands"] = filters["brands"]
+                    bindparams_list.append(bindparam("brands"))
+                
+                if filters.get("colors"):
+                    color_conditions = []
+                    for i, color in enumerate(filters["colors"]):
+                        color_param = f"color_{i}"
+                        color_conditions.append(f"colorways ILIKE :{color_param}")
+                        params[color_param] = f"%{color}%"
+                        bindparams_list.append(bindparam(color_param))
+                    query_parts.append(f" AND ({' OR '.join(color_conditions)})")
+                
+                if filters.get("price_range") and len(filters["price_range"]) == 2:
+                    query_parts.append(" AND lowest_price BETWEEN :min_price AND :max_price")
+                    params["min_price"] = filters["price_range"][0]
+                    params["max_price"] = filters["price_range"][1]
+                    bindparams_list.extend([bindparam("min_price"), bindparam("max_price")])
+            
+            query_parts.append(" ORDER BY similarity_score DESC LIMIT :top_k")
+            query_sql = "".join(query_parts)
+            
+            stmt = text(query_sql).bindparams(*bindparams_list)
+            result = await db.execute(stmt, params)
+            rows = result.fetchall()
+            
+            logger.debug(f"[Visual Embedding Search] Found {len(rows)} results")
+            
+            return [dict(row._mapping) for row in rows]
+            
+        except Exception as e:
+            logger.error(f"Visual embedding search failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return []
+
 
 
 class ReRanker:
@@ -1198,7 +1274,7 @@ class HybridSearchService:
         start_time = datetime.now()
         
         try:
-            print(f"[Hybrid Search] Image search for: {image_url}")
+            print(f"[Hybrid Search] Image search started")
             
             # Download image and generate embedding
             image = download_image(image_url)
@@ -1257,6 +1333,16 @@ class HybridSearchService:
         """Combine and deduplicate results from different search methods"""
         combined = {}
         
+        # Add semantic results
+        for result in semantic_results:
+            product_id = result.get("sku_id")
+            if product_id and product_id not in combined:
+                combined[product_id] = {
+                    **result,
+                    "semantic_score": result.get("similarity_score", 0),
+                    "keyword_score": 0
+                }
+        
         # Add keyword results
         for result in keyword_results:
             product_id = result.get("sku_id")
@@ -1269,16 +1355,6 @@ class HybridSearchService:
                         "semantic_score": 0,
                         "keyword_score": result.get("keyword_score", 0)
                     }
-        
-        # Add semantic results
-        for result in semantic_results:
-            product_id = result.get("sku_id")
-            if product_id and product_id not in combined:
-                combined[product_id] = {
-                    **result,
-                    "semantic_score": result.get("similarity_score", 0),
-                    "keyword_score": 0
-                }
         
         return list(combined.values())
     
