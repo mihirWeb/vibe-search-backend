@@ -108,6 +108,167 @@ class QueryExpander:
 class VectorSearchService:
     """Handles vector similarity search operations"""
     
+    # Category and product type mappings for strict filtering
+    CATEGORY_MAPPINGS = {
+        "top": ["apparel", "streetwear", "clothing"],
+        "bottom": ["apparel", "streetwear"],
+        "shoes": ["sneakers", "shoes"],
+        "hat": ["accessories"],
+        "watch": ["watches"],
+        "bag": ["handbags", "bag", "backpack", "accessories"]
+    }
+    
+    PRODUCT_TYPE_MAPPINGS = {
+        "top": ["clothing", "streetwear", "tops"],
+        "bottom": ["clothing", "streetwear", "bottoms"],
+        "shoes": ["sneakers", "shoes"],
+        "hat": ["accessories", "hat"],
+        "watch": ["watches", "accessories"],
+        "bag": ["handbags", "accessories"]
+    }
+    
+    async def search_by_text_embedding_with_prefilter(
+        self,
+        db: AsyncSession,
+        query_embedding: List[float],
+        item_type: str,
+        top_k: int = 10,
+        filters: Dict = None
+    ) -> List[Dict]:
+        """
+        Two-stage search:
+        1. Filter by category and product_type for the item_type
+        2. Apply embedding search on filtered results
+        
+        Args:
+            db: Database session
+            query_embedding: Query embedding vector
+            item_type: Type of item (top, bottom, shoes, hat, watch, bag)
+            top_k: Number of results to return
+            filters: Additional filters (brands, gender, price_range)
+        """
+        try:
+            # Get allowed categories and product types for this item type
+            allowed_categories = self.CATEGORY_MAPPINGS.get(item_type, [])
+            allowed_product_types = self.PRODUCT_TYPE_MAPPINGS.get(item_type, [])
+            
+            if not allowed_categories and not allowed_product_types:
+                logger.warning(f"[Pre-filter Search] No category/product_type mappings for: {item_type}")
+                return []
+            
+            logger.debug(f"[Pre-filter Search] Item type: {item_type}")
+            logger.debug(f"[Pre-filter Search] Allowed categories: {allowed_categories}")
+            logger.debug(f"[Pre-filter Search] Allowed product types: {allowed_product_types}")
+            
+            # Convert embedding to PostgreSQL vector string format
+            embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
+            
+            # Build query with category and product_type pre-filtering
+            query_parts = [f"""
+                SELECT 
+                    id, sku_id, title, description, category, sub_category,
+                    brand_name, product_type, gender, colorways, lowest_price,
+                    featured_image, pdp_url, wishlist_num, tags,
+                    1 - (textual_embedding <=> '{embedding_str}'::vector) as similarity_score
+                FROM store_items
+                WHERE textual_embedding IS NOT NULL
+            """]
+            
+            bindparams_list = [bindparam("top_k")]
+            params = {"top_k": top_k * 3}  # Get more results for filtering
+            
+            # Add category and product_type filters
+            if allowed_categories:
+                category_conditions = []
+                for i, cat in enumerate(allowed_categories):
+                    cat_param = f"cat_{i}"
+                    category_conditions.append(f"category ILIKE :{cat_param}")
+                    params[cat_param] = f"%{cat}%"
+                    bindparams_list.append(bindparam(cat_param))
+                
+                # ✅ Category must be non-null and match allowed categories
+                category_filter = f"(category IS NOT NULL AND ({' OR '.join(category_conditions)}))"
+                query_parts.append(f" AND {category_filter}")
+
+            if allowed_product_types:
+                product_type_conditions = []
+                for i, ptype in enumerate(allowed_product_types):
+                    ptype_param = f"ptype_{i}"
+                    product_type_conditions.append(f"product_type ILIKE :{ptype_param}")
+                    params[ptype_param] = f"%{ptype}%"
+                    bindparams_list.append(bindparam(ptype_param))
+                
+                # ✅ Product type can either match or be NULL
+                product_type_filter = f"(({' OR '.join(product_type_conditions)}) OR product_type IS NULL)"
+                query_parts.append(f" AND {product_type_filter}")
+            
+            # Add additional filters (brands, gender, price_range)
+            if filters:
+                if filters.get("brands"):
+                    query_parts.append(" AND brand_name = ANY(:brands)")
+                    params["brands"] = filters["brands"]
+                    bindparams_list.append(bindparam("brands"))
+                
+                if filters.get("gender"):
+                    query_parts.append(" AND gender = :gender")
+                    params["gender"] = filters["gender"]
+                    bindparams_list.append(bindparam("gender"))
+                
+                if filters.get("price_range") and len(filters["price_range"]) == 2:
+                    query_parts.append(" AND lowest_price BETWEEN :min_price AND :max_price")
+                    params["min_price"] = filters["price_range"][0]
+                    params["max_price"] = filters["price_range"][1]
+                    bindparams_list.extend([bindparam("min_price"), bindparam("max_price")])
+            
+            # Order by similarity and limit
+            query_parts.append(" ORDER BY similarity_score DESC LIMIT :top_k")
+            query_sql = "".join(query_parts)
+            
+            logger.debug(f"[Pre-filter Search] Executing filtered search for {item_type}")
+            
+            stmt = text(query_sql).bindparams(*bindparams_list)
+            result = await db.execute(stmt, params)
+            rows = result.fetchall()
+            
+            results = [dict(row._mapping) for row in rows]
+            
+            logger.debug(f"[Pre-filter Search] Found {len(results)} results for {item_type}")
+            
+            # Additional Python-level verification
+            verified_results = []
+            for result in results:
+                result_category = (result.get("category") or "").lower()
+                result_product_type = (result.get("product_type") or "").lower()
+                
+                # Check if category matches any allowed category (partial match)
+                category_match = any(
+                    cat.lower() in result_category or result_category in cat.lower()
+                    for cat in allowed_categories
+                )
+                
+                # Check if product_type matches any allowed product type (partial match)
+                product_type_match = any(
+                    ptype.lower() in result_product_type or result_product_type in ptype.lower()
+                    for ptype in allowed_product_types
+                )
+                
+                # Item must match EITHER category OR product_type
+                if category_match or product_type_match:
+                    verified_results.append(result)
+                else:
+                    logger.debug(f"[Pre-filter Search] Filtered out: {result.get('title')} - category: {result_category}, product_type: {result_product_type}")
+            
+            logger.debug(f"[Pre-filter Search] After verification: {len(verified_results)} results")
+            
+            return verified_results[:top_k]
+            
+        except Exception as e:
+            logger.error(f"Pre-filter search failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return []
+    
+    # Keep the original search methods for backward compatibility
     async def search_by_text_embedding(
         self, 
         db: AsyncSession, 
@@ -121,7 +282,6 @@ class VectorSearchService:
             embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
             
             # Build query - embed the vector string directly in SQL
-            # Since we're using string substitution for the vector, don't bind it as a parameter
             query_parts = [f"""
                 SELECT 
                     id, sku_id, title, description, category, sub_category,
@@ -132,18 +292,23 @@ class VectorSearchService:
                 WHERE textual_embedding IS NOT NULL
             """]
             
-            # Prepare bindparams list (without embedding since it's in the query string)
+            # Prepare bindparams list
             bindparams_list = [bindparam("top_k")]
-            
-            # Use dictionary for parameters (without embedding)
             params = {"top_k": top_k}
             
             # Add filters with named parameters
             if filters:
                 if filters.get("category"):
-                    query_parts.append(" AND category = ANY(:categories)")
-                    params["categories"] = filters["category"]
-                    bindparams_list.append(bindparam("categories"))
+                    categories = filters["category"]
+                    # Build flexible category matching using ILIKE for partial matches
+                    category_conditions = []
+                    for i, cat in enumerate(categories):
+                        cat_param = f"cat_{i}"
+                        category_conditions.append(f"category ILIKE :{cat_param}")
+                        params[cat_param] = f"%{cat}%"
+                        bindparams_list.append(bindparam(cat_param))
+                    
+                    query_parts.append(f" AND ({' OR '.join(category_conditions)})")
                 
                 if filters.get("brands"):
                     query_parts.append(" AND brand_name = ANY(:brands)")
@@ -162,17 +327,17 @@ class VectorSearchService:
                     bindparams_list.extend([bindparam("min_price"), bindparam("max_price")])
             
             query_parts.append(" ORDER BY similarity_score DESC LIMIT :top_k")
-            
             query_sql = "".join(query_parts)
             
-            # Create text() with bindparams
-            stmt = text(query_sql).bindparams(*bindparams_list)
+            # Use logger.debug instead of print for SQL queries
+            logger.debug(f"Text embedding search query filters: {filters}")
             
-            # Execute with dictionary parameters
+            stmt = text(query_sql).bindparams(*bindparams_list)
             result = await db.execute(stmt, params)
             rows = result.fetchall()
             
-            # Convert rows to dictionaries
+            logger.debug(f"[Text Embedding Search] Found {len(rows)} results")
+            
             return [dict(row._mapping) for row in rows]
             
         except Exception as e:
@@ -194,7 +359,6 @@ class VectorSearchService:
             embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
             
             # Build query - embed the vector string directly in SQL
-            # Since we're using string substitution for the vector, don't bind it as a parameter
             query_parts = [f"""
                 SELECT 
                     id, sku_id, title, description, category, sub_category,
@@ -205,18 +369,20 @@ class VectorSearchService:
                 WHERE visual_embedding IS NOT NULL
             """]
             
-            # Prepare bindparams list (without embedding since it's in the query string)
             bindparams_list = [bindparam("top_k")]
-            
-            # Use dictionary for parameters (without embedding)
             params = {"top_k": top_k}
             
-            # Add filters with named parameters
+            # Add filters
             if filters:
                 if filters.get("category"):
-                    query_parts.append(" AND category = ANY(:categories)")
-                    params["categories"] = filters["category"]
-                    bindparams_list.append(bindparam("categories"))
+                    categories = filters["category"]
+                    category_conditions = []
+                    for i, cat in enumerate(categories):
+                        cat_param = f"cat_{i}"
+                        category_conditions.append(f"category ILIKE :{cat_param}")
+                        params[cat_param] = f"%{cat}%"
+                        bindparams_list.append(bindparam(cat_param))
+                    query_parts.append(f" AND ({' OR '.join(category_conditions)})")
                 
                 if filters.get("brands"):
                     query_parts.append(" AND brand_name = ANY(:brands)")
@@ -224,7 +390,6 @@ class VectorSearchService:
                     bindparams_list.append(bindparam("brands"))
                 
                 if filters.get("colors"):
-                    # For multiple colors, use OR conditions
                     color_conditions = []
                     for i, color in enumerate(filters["colors"]):
                         color_param = f"color_{i}"
@@ -240,15 +405,13 @@ class VectorSearchService:
                     bindparams_list.extend([bindparam("min_price"), bindparam("max_price")])
             
             query_parts.append(" ORDER BY similarity_score DESC LIMIT :top_k")
-            
             query_sql = "".join(query_parts)
             
-            # Create text() with bindparams
             stmt = text(query_sql).bindparams(*bindparams_list)
-            
-            # Execute with dictionary parameters
             result = await db.execute(stmt, params)
             rows = result.fetchall()
+            
+            logger.debug(f"[Visual Embedding Search] Found {len(rows)} results")
             
             return [dict(row._mapping) for row in rows]
             
@@ -493,103 +656,49 @@ class HybridSearchService:
         start_time = datetime.now()
         
         try:
-            print(f"[Hybrid Search] Text search for: {query}")
+            # print(f"[Hybrid Search] Text search for: {query}")
             
             # Step 1: AI-powered query parsing (if enabled)
             ai_parsed_query = None
             refined_query = query
             ai_filters = {}
+            is_collection_query = False
+            existing_items = {}
             
             if use_ai_parser:
                 try:
                     ai_parsed_query = self.query_parser.parse_query(query)
                     refined_query = ai_parsed_query.get("refined_query", query)
                     ai_filters = ai_parsed_query.get("filters", {})
+                    is_collection_query = ai_parsed_query.get("is_collection_query", False)
+                    existing_items = ai_parsed_query.get("existing_items", {})
                     print(f"[Hybrid Search] AI parsed query: {ai_parsed_query}")
+                    print(f"[Hybrid Search] Is collection query: {is_collection_query}")
                 except Exception as e:
                     logger.error(f"[Hybrid Search] AI parsing failed, using original query: {e}")
                     refined_query = query
             
-            # Step 2: Merge AI filters with provided filters
-            merged_filters = self._merge_filters(filters, ai_filters)
-            print(f"[Hybrid Search] Merged filters: {merged_filters}")
-            
-            # Step 3: Query understanding and expansion on refined query
-            query_analysis = self.query_expander.expand_query(refined_query)
-            
-            # Add AI parsing info to query analysis
-            if ai_parsed_query:
-                query_analysis["ai_parsing"] = {
-                    "original_query": ai_parsed_query.get("original_query"),
-                    "refined_query": refined_query,
-                    "ai_filters": ai_filters,
-                    "explanation": ai_parsed_query.get("explanation")
-                }
-            
-            print(f"[Hybrid Search] Query analysis: {query_analysis}")
-            
-            # Step 4: Build enriched query text with filter values for embedding generation
-            enriched_query_text = self._build_enriched_query(refined_query, merged_filters, ai_filters)
-            print(f"[Hybrid Search] Enriched query for embedding: {enriched_query_text}")
-            
-            # Step 5: Generate query embedding from enriched query text
-            query_embedding = generate_text_embedding(enriched_query_text)
-            
-            # Pad to 768 dimensions if needed
-            if len(query_embedding) < 768:
-                query_embedding = query_embedding + [0.0] * (768 - len(query_embedding))
-            query_embedding = query_embedding[:768]
-            
-            # Step 6: Perform parallel searches with merged filters
-            semantic_task = self.vector_search.search_by_text_embedding(
-                db, query_embedding, top_k * 2, merged_filters
-            )
-            
-            keyword_task = self.bm25_search.search_by_keywords(
-                db, query_analysis["expanded_terms"], top_k * 2, merged_filters
-            )
-            
-            semantic_results, keyword_results = await asyncio.gather(
-                semantic_task, keyword_task, return_exceptions=True
-            )
-            
-            # Handle exceptions
-            if isinstance(semantic_results, Exception):
-                logger.error(f"Semantic search failed: {semantic_results}")
-                semantic_results = []
-            else:
-                print(f"[Hybrid Search] Semantic results: {len(semantic_results)}")
-            
-            if isinstance(keyword_results, Exception):
-                logger.error(f"Keyword search failed: {keyword_results}")
-                keyword_results = []
-            else:
-                print(f"[Hybrid Search] Keyword results: {len(keyword_results)}")
-            
-            # Step 7: Combine and deduplicate results
-            combined_results = self._combine_results(semantic_results, keyword_results)
-            print(f"[Hybrid Search] Combined results: {len(combined_results)}")
-            
-            # Step 8: Apply exclusion filters
-            combined_results = self._apply_exclusion_filters(combined_results, ai_filters)
-            print(f"[Hybrid Search] After exclusions: {len(combined_results)}")
-            
-            # Step 9: Rerank if requested
-            if rerank:
-                combined_results = self.reranker.rerank_results(
-                    combined_results, query_analysis, mode="hybrid"
+            # Step 2: Route to collection or normal search
+            if is_collection_query:
+                return await self._search_collection(
+                    db=db,
+                    refined_query=refined_query,
+                    ai_parsed_query=ai_parsed_query,
+                    filters=filters,
+                    rerank=rerank,
+                    start_time=start_time
                 )
-            
-            # Step 10: Format response
-            search_time = (datetime.now() - start_time).total_seconds() * 1000
-            
-            return {
-                "query_understanding": query_analysis,
-                "matches": combined_results[:top_k],
-                "search_strategy": "AI-powered hybrid search with query parsing and exclusions",
-                "total_results": len(combined_results),
-                "search_time_ms": round(search_time, 2)
-            }
+            else:
+                # Normal search flow (existing code)
+                return await self._search_normal(
+                    db=db,
+                    refined_query=refined_query,
+                    ai_parsed_query=ai_parsed_query,
+                    filters=filters,
+                    top_k=top_k,
+                    rerank=rerank,
+                    start_time=start_time
+                )
             
         except Exception as e:
             logger.error(f"Text search failed: {e}")
@@ -600,8 +709,433 @@ class HybridSearchService:
                 "matches": [],
                 "search_strategy": "failed",
                 "total_results": 0,
-                "search_time_ms": 0
+                "search_time_ms": 0,
+                "is_collection_query": False
             }
+    async def _search_normal(
+        self,
+        db: AsyncSession,
+        refined_query: str,
+        ai_parsed_query: Dict,
+        filters: Dict,
+        top_k: int,
+        rerank: bool,
+        start_time: datetime
+    ) -> Dict:
+        """Normal search flow with multi-step pre-filtering"""
+        ai_filters = ai_parsed_query.get("filters", {}) if ai_parsed_query else {}
+        
+        # Merge filters
+        merged_filters = self._merge_filters(filters, ai_filters)
+        print(f"[Hybrid Search] Merged filters: {merged_filters}")
+        
+        # Query understanding and expansion
+        query_analysis = self.query_expander.expand_query(refined_query)
+        
+        # Add AI parsing info
+        if ai_parsed_query:
+            query_analysis["ai_parsing"] = {
+                "original_query": ai_parsed_query.get("original_query"),
+                "refined_query": refined_query,
+                "ai_filters": ai_filters,
+                "explanation": ai_parsed_query.get("explanation")
+            }
+        
+        print(f"[Hybrid Search] Query analysis: {query_analysis}")
+        
+        # Build enriched query
+        enriched_query_text = self._build_enriched_query(refined_query, merged_filters, ai_filters)
+        print(f"[Hybrid Search] Enriched query for embedding: {enriched_query_text}")
+        
+        # Generate query embedding
+        query_embedding = generate_text_embedding(enriched_query_text)
+        
+        # Pad to 768 dimensions
+        if len(query_embedding) < 768:
+            query_embedding = query_embedding + [0.0] * (768 - len(query_embedding))
+        query_embedding = query_embedding[:768]
+        
+        # ✅ NEW: Check if type filter exists for pre-filtering
+        item_types = ai_filters.get("type", [])
+        
+        if item_types:
+            # Use pre-filter search for each item type
+            print(f"[Hybrid Search] Using pre-filter search for types: {item_types}")
+            
+            semantic_results = []
+            for item_type in item_types:
+                type_results = await self.vector_search.search_by_text_embedding_with_prefilter(
+                    db=db,
+                    query_embedding=query_embedding,
+                    item_type=item_type,
+                    top_k=top_k * 2,  # Get more for each type
+                    filters=merged_filters
+                )
+                semantic_results.extend(type_results)
+            
+            # Remove duplicates based on sku_id
+            seen_ids = set()
+            unique_semantic_results = []
+            for result in semantic_results:
+                sku_id = result.get("sku_id")
+                if sku_id and sku_id not in seen_ids:
+                    seen_ids.add(sku_id)
+                    unique_semantic_results.append(result)
+            
+            semantic_results = unique_semantic_results
+            print(f"[Hybrid Search] Pre-filter semantic results: {len(semantic_results)}")
+        else:
+            # Use regular semantic search without pre-filtering
+            print(f"[Hybrid Search] Using regular semantic search (no type filter)")
+            semantic_results = await self.vector_search.search_by_text_embedding(
+                db, query_embedding, top_k * 2, merged_filters
+            )
+            print(f"[Hybrid Search] Regular semantic results: {len(semantic_results)}")
+        
+        # Keyword search (unchanged)
+        keyword_results = await self.bm25_search.search_by_keywords(
+            db, query_analysis["expanded_terms"], top_k * 2, merged_filters
+        )
+        print(f"[Hybrid Search] Keyword results: {len(keyword_results)}")
+        
+        # Combine and deduplicate
+        combined_results = self._combine_results(semantic_results) #removing keyword results
+        print(f"[Hybrid Search] Combined results: {len(combined_results)}")
+        
+        # Apply exclusion filters
+        combined_results = self._apply_exclusion_filters(combined_results, ai_filters)
+        print(f"[Hybrid Search] After exclusions: {len(combined_results)}")
+        
+        # Rerank if requested
+        if rerank:
+            combined_results = self.reranker.rerank_results(
+                combined_results, query_analysis, mode="hybrid"
+            )
+        
+        # Format response
+        search_time = (datetime.now() - start_time).total_seconds() * 1000
+        
+        return {
+            "query_understanding": query_analysis,
+            "matches": combined_results,
+            "search_strategy": "AI-powered hybrid search with pre-filtering and query parsing",
+            "total_results": len(combined_results),
+            "search_time_ms": round(search_time, 2),
+            "is_collection_query": False
+        }
+        
+        
+    async def _search_collection(
+        self,
+        db: AsyncSession,
+        refined_query: str,
+        ai_parsed_query: Dict,
+        filters: Dict,
+        rerank: bool,
+        start_time: datetime
+    ) -> Dict:
+        """Collection search flow - generates 10 complete looks"""
+        print("[Hybrid Search] Starting collection search")
+        
+        ai_filters = ai_parsed_query.get("filters", {})
+        item_types = ai_filters.get("type", [])
+        existing_items = ai_parsed_query.get("existing_items", {})
+        
+        # ✅ CRITICAL FIX: If only 1 item type, route to NORMAL search
+        if len(item_types) <= 1:
+            logger.info(f"[Collection] Only {len(item_types)} item type(s) detected, routing to normal search")
+            return await self._search_normal(
+                db=db,
+                refined_query=refined_query,
+                ai_parsed_query={
+                    **ai_parsed_query,
+                    "is_collection_query": False  # Override to false
+                },
+                filters=filters,
+                top_k=10,
+                rerank=rerank,
+                start_time=start_time
+            )
+        
+        # Merge filters
+        merged_filters = self._merge_filters(filters, ai_filters)
+        
+        # Generate 10 complete looks
+        looks = await self._generate_looks(
+            db=db,
+            refined_query=refined_query,
+            item_types=item_types,
+            existing_items=existing_items,
+            merged_filters=merged_filters,
+            ai_filters=ai_filters,
+            num_looks=10
+        )
+        
+        # ✅ ADDITIONAL FIX: If no looks generated, fallback to normal search
+        if len(looks) == 0:
+            logger.warning("[Collection] No looks generated, falling back to normal search")
+            return await self._search_normal(
+                db=db,
+                refined_query=refined_query,
+                ai_parsed_query={
+                    **ai_parsed_query,
+                    "is_collection_query": False
+                },
+                filters=filters,
+                top_k=10,
+                rerank=rerank,
+                start_time=start_time
+            )
+        
+        # Format response
+        search_time = (datetime.now() - start_time).total_seconds() * 1000
+        
+        return {
+            "query_understanding": {
+                "original_query": ai_parsed_query.get("original_query"),
+                "refined_query": refined_query,
+                "item_types": item_types,
+                "existing_items": existing_items,
+                "explanation": ai_parsed_query.get("explanation")
+            },
+            "looks": looks,
+            "search_strategy": "AI-powered collection search",
+            "total_looks": len(looks),
+            "search_time_ms": round(search_time, 2),
+            "is_collection_query": True
+        }
+        
+    async def _generate_looks(
+        self,
+        db: AsyncSession,
+        refined_query: str,
+        item_types: List[str],
+        existing_items: Dict,
+        merged_filters: Dict,
+        ai_filters: Dict,
+        num_looks: int = 10
+    ) -> List[Dict]:
+        """Generate complete looks by fetching top 2 items per sub-type (5 sub-types per type = 10 items per type)"""
+        print(f"[Collection] Generating {num_looks} looks for types: {item_types}")
+        
+        # Determine gender for sub-type selection
+        gender = ai_filters.get("gender", "").lower()
+        if "men" in gender or "male" in gender:
+            gender_key = "men"
+        elif "women" in gender or "female" in gender:
+            gender_key = "women"
+        else:
+            # Default to men if no gender specified (or handle both)
+            gender_key = "men"
+        
+        # Get sub-type mappings for the determined gender
+        if gender_key not in self.query_parser.sub_type_mappings:
+            logger.error(f"[Collection] Gender key '{gender_key}' not found in sub_type_mappings")
+            return []
+        
+        gender_mappings = self.query_parser.sub_type_mappings[gender_key]
+        
+        # Build search tasks for each type
+        search_tasks = []
+        
+        for item_type in item_types:
+            if item_type not in gender_mappings:
+                logger.warning(f"[Collection] Item type '{item_type}' not found for gender '{gender_key}'")
+                continue
+            
+            sub_types_dict = gender_mappings[item_type]
+            
+            # For each sub-type, create search task
+            for sub_type, specific_items in sub_types_dict.items():
+                # Create enriched query for this sub-type using all 5 specific items
+                sub_query = f"{refined_query} {sub_type} {' '.join(specific_items)}"
+                
+                # Generate embedding
+                embedding = generate_text_embedding(sub_query)
+                if len(embedding) < 768:
+                    embedding = embedding + [0.0] * (768 - len(embedding))
+                embedding = embedding[:768]
+                
+                # Create search task to fetch top 2 results for this sub-type
+                task = self._search_sub_type(
+                    db=db,
+                    embedding=embedding,
+                    item_type=item_type,
+                    sub_type=sub_type,
+                    merged_filters=merged_filters,
+                    ai_filters=ai_filters,
+                    top_k=2  # Top 2 per sub-type
+                )
+                search_tasks.append(task)
+        
+        # Execute all searches in parallel
+        print(f"[Collection] Executing {len(search_tasks)} parallel searches")
+        results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        
+        # Organize results by type (each type will have 10 items: 2 per sub-type × 5 sub-types)
+        items_by_type = {}
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Sub-type search failed: {result}")
+                continue
+            
+            item_type = result["item_type"]
+            if item_type not in items_by_type:
+                items_by_type[item_type] = []
+            items_by_type[item_type].extend(result["items"])
+        
+        print(f"[Collection] Found items: {[(k, len(v)) for k, v in items_by_type.items()]}")
+        
+        # print(f"[Collection] items by type: {items_by_type}")
+        
+        # Generate looks by combining items
+        looks = self._combine_items_into_looks(
+            items_by_type=items_by_type,
+            item_types=item_types,
+            existing_items=existing_items,
+            num_looks=num_looks
+        )
+        
+        return looks
+
+    async def _search_sub_type(
+        self,
+        db: AsyncSession,
+        embedding: List[float],
+        item_type: str,
+        sub_type: str,
+        merged_filters: Dict,
+        ai_filters: Dict,
+        top_k: int = 2
+    ) -> Dict:
+        """
+        Search for items of a specific sub-type using TWO-STAGE filtering:
+        1. Pre-filter by category and product_type
+        2. Apply embedding search on filtered results
+        """
+        try:
+            logger.debug(f"[Sub-type Search] Type: {item_type}, Sub-type: {sub_type}")
+            
+            # Use the NEW pre-filter search method
+            results = await self.vector_search.search_by_text_embedding_with_prefilter(
+                db=db,
+                query_embedding=embedding,
+                item_type=item_type,
+                top_k=top_k * 2,  # Get more for exclusion filtering
+                filters=merged_filters
+            )
+            
+            # Apply exclusion filters
+            results = self._apply_exclusion_filters(results, ai_filters)
+            
+            logger.debug(f"[Sub-type Search] Found {len(results)} results for {item_type}/{sub_type} after all filtering")
+            
+            # Take top_k
+            results = results[:top_k]
+            
+            return {
+                "item_type": item_type,
+                "sub_type": sub_type,
+                "items": results
+            }
+        except Exception as e:
+            logger.error(f"Sub-type search failed for {item_type}/{sub_type}: {e}")
+            return {
+                "item_type": item_type,
+                "sub_type": sub_type,
+                "items": []
+            }
+
+    def _combine_items_into_looks(
+        self,
+        items_by_type: Dict[str, List[Dict]],
+        item_types: List[str],
+        existing_items: Dict,
+        num_looks: int = 10
+    ) -> List[Dict]:
+        """Combine items from different types into complete looks"""
+        looks = []
+        
+        # Get existing items info
+        existing_types = existing_items.get("type", [])
+        existing_brands = existing_items.get("brands", [])
+        
+        print(f"[Collection] Combining items into looks - existing_types: {existing_types}, existing_brands: {existing_brands}")
+        print(f"[Collection] Items by type keys: {list(items_by_type.keys())}")
+        
+        # ✅ CRITICAL CHECK: If only 1 item type with items, don't create looks
+        available_types = [t for t in item_types if items_by_type.get(t)]
+        if len(available_types) <= 1:
+            logger.warning(f"[Collection] Only {len(available_types)} type(s) have items - insufficient for looks")
+            return []
+        
+        # For each look, pick one item from each type
+        for look_idx in range(num_looks):
+            look = {
+                "look_id": look_idx + 1,
+                "items": {}
+            }
+            
+            for item_type in item_types:
+                # Skip if this is an existing item type
+                if item_type in existing_types:
+                    # Use existing item info
+                    look["items"][item_type] = {
+                        "product_id": None,
+                        "title": f"Your {item_type}",
+                        "brand": ", ".join(existing_brands) if existing_brands else "Your Item",
+                        "category": None,
+                        "price": None,
+                        "image_url": None,
+                        "pdp_url": None,
+                        "type": item_type,
+                        "is_existing": True,
+                        "brands": existing_brands
+                    }
+                    continue
+                
+                # Get items for this type
+                type_items = items_by_type.get(item_type, [])
+                if not type_items:
+                    print(f"[Collection] No items found for type: {item_type}")
+                    continue
+                
+                # Pick item for this look (cycle through available items)
+                item_idx = look_idx % len(type_items)
+                item = type_items[item_idx]
+                
+                # Convert Decimal to float for price
+                price = item.get("lowest_price")
+                if price is not None:
+                    try:
+                        price = float(price)
+                    except (ValueError, TypeError):
+                        price = None
+                
+                # Format the item properly for frontend
+                look["items"][item_type] = {
+                    "product_id": item.get("sku_id"),
+                    "title": item.get("title"),
+                    "brand": item.get("brand_name"),
+                    "category": item.get("category"),
+                    "price": price,
+                    "image_url": item.get("featured_image"),
+                    "pdp_url": item.get("pdp_url"),
+                    "type": item_type,
+                    "is_existing": False,
+                    "brands": None
+                }
+            
+            # Only add look if it has at least 2 items
+            if len(look["items"]) >= 2:
+                looks.append(look)
+                print(f"[Collection] Created look {look_idx + 1} with {len(look['items'])} items")
+            else:
+                print(f"[Collection] Skipped look {look_idx + 1} - only {len(look['items'])} items (need at least 2)")
+        
+        print(f"[Collection] Generated {len(looks)} complete looks")
+        
+        return looks[:num_looks]
 
     def _build_enriched_query(self, refined_query: str, merged_filters: Dict, ai_filters: Dict) -> str:
         """

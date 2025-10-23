@@ -269,7 +269,7 @@ def generate_visual_embedding(image: Image.Image) -> List[float]:
 
 def generate_text_embedding(text: str) -> List[float]:
     """Generate Sentence-Transformers text embedding"""
-    print(f"[Image Processing] Generating text embedding for: {text[:50]}...")
+    print(f"[Image Processing] Generating text embedding for: {text}")
     
     if not text or text.strip() == "":
         # Return a zero vector if text is empty
