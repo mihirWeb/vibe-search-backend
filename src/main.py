@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from datetime import datetime
 from sqlalchemy import text
 import traceback
+import logging  # Add this import
 
 from src.config.settings import settings
 from src.routes import router as api_routes
@@ -14,6 +15,15 @@ from src.models.instagram_post_model import InstagramPost
 from src.models.product_model import Product
 from src.models.product_item_model import ProductItem
 from src.models.store_item_model import StoreItem  # Add this import
+
+# Configure logging - Add this section
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Set SQLAlchemy engine logging to WARNING to reduce query logs
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 app = FastAPI(
     title=settings.APP_NAME,

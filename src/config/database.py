@@ -7,14 +7,14 @@ from src.config.settings import settings
 # For PostgreSQL (using asyncpg)
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=True,  # Set to False in production
+    echo=False,  # Changed from True to False
     future=True
 )
 
 # For SQLite (using aiosqlite)
 # engine = create_async_engine(
 #     "sqlite+aiosqlite:///./app.db",
-#     echo=True,
+#     echo=False,  # Also change this if you use SQLite
 #     future=True
 # )
 
