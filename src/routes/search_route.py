@@ -215,61 +215,85 @@ async def embedding_test_search(
 @router.post("/image", response_model=ImageSearchResponse)
 async def search_by_image(
     request: ImageSearchRequest,
+    use_ai_parser: bool = True,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Search for products using an image as input.
+    Search for products using an image with optional text query.
     
-    This endpoint analyzes the provided image and finds visually similar products
-    in the database using visual embeddings.
+    This endpoint analyzes the provided image and finds visually similar products.
+    If a text query is provided, it uses AI parsing to refine the search with
+    collection support and pre-filtering.
     """
     try:
         # Clean filters to remove None/empty values
         filters = clean_filters(request.filters)
         
-        logger.info(f"Image search URL: {request.image_url}, filters: {filters}")
+        logger.info(f"Image search URL: {request.image_url}, query: {request.query}, filters: {filters}")
         
-        # Perform search
+        # Perform search with optional query
         results = await search_service.search_by_image(
             db=db,
             image_url=request.image_url,
+            query=request.query,
             top_k=request.top_k,
             filters=filters,
-            rerank=request.rerank
+            rerank=request.rerank,
+            use_ai_parser=use_ai_parser and bool(request.query)
         )
         
-        # Format matches
-        formatted_matches = []
-        for match in results.get("matches", []):
-            formatted_match = MatchResult(
-                product_id=match.get("sku_id", ""),
-                title=match.get("title", ""),
-                brand=match.get("brand_name"),
-                category=match.get("category"),
-                sub_category=match.get("sub_category"),
-                price=float(match.get("lowest_price", 0)) if match.get("lowest_price") else None,
-                image_url=match.get("featured_image"),
-                pdp_url=match.get("pdp_url"),
-                similarity_score=match.get("similarity_score"),
-                combined_score=match.get("combined_score", 0),
-                match_reasons=match.get("match_reasons", []),
-                colorways=match.get("colorways"),
-                gender=match.get("gender")
+        # Check if this is a collection query
+        is_collection_query = results.get("is_collection_query", False)
+        
+        if is_collection_query:
+            # Return collection response
+            return ImageSearchResponse(
+                success=True,
+                query_analysis=results.get("query_analysis", {}),
+                matches=[],
+                total_results=0,
+                search_time_ms=results.get("search_time_ms", 0),
+                is_collection_query=True,
+                looks=results.get("looks", []),
+                total_looks=results.get("total_looks", 0)
             )
-            formatted_matches.append(formatted_match)
-        
-        return ImageSearchResponse(
-            success=True,
-            query_analysis=results.get("query_analysis", {}),
-            matches=formatted_matches,
-            total_results=results.get("total_results", 0),
-            search_time_ms=results.get("search_time_ms", 0)
-        )
+        else:
+            # Format matches for normal search
+            formatted_matches = []
+            for match in results.get("matches", []):
+                formatted_match = MatchResult(
+                    product_id=match.get("sku_id", ""),
+                    title=match.get("title", ""),
+                    brand=match.get("brand_name"),
+                    category=match.get("category"),
+                    sub_category=match.get("sub_category"),
+                    price=float(match.get("lowest_price", 0)) if match.get("lowest_price") else None,
+                    image_url=match.get("featured_image"),
+                    pdp_url=match.get("pdp_url"),
+                    similarity_score=match.get("similarity_score"),
+                    combined_score=match.get("combined_score", 0),
+                    match_reasons=match.get("match_reasons", []),
+                    colorways=match.get("colorways"),
+                    gender=match.get("gender")
+                )
+                formatted_matches.append(formatted_match)
+            
+            return ImageSearchResponse(
+                success=True,
+                query_analysis=results.get("query_analysis", {}),
+                matches=formatted_matches,
+                total_results=results.get("total_results", 0),
+                search_time_ms=results.get("search_time_ms", 0),
+                is_collection_query=False,
+                looks=None,
+                total_looks=None
+            )
         
     except Exception as e:
         logger.error(f"Image search failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Image search failed: {str(e)}")
-
 
 @router.get("/health")
 async def search_health_check():

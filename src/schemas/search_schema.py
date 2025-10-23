@@ -27,6 +27,7 @@ class TextSearchRequest(BaseModel):
 class ImageSearchRequest(BaseModel):
     """Request schema for image-based search"""
     image_url: str = Field(..., description="URL of the image to search")
+    query: Optional[str] = Field(None, description="Optional text query to refine image search")
     top_k: int = Field(10, ge=1, le=50, description="Number of results to return")
     filters: Optional[SearchFilters] = Field(None, description="Search filters")
     rerank: bool = Field(True, description="Whether to rerank results")
@@ -100,3 +101,6 @@ class ImageSearchResponse(BaseModel):
     matches: List[MatchResult] = Field(default_factory=list, description="Search results")
     total_results: int = Field(..., description="Total number of results")
     search_time_ms: float = Field(..., description="Search execution time in milliseconds")
+    is_collection_query: bool = Field(False, description="Whether this was a collection query")
+    looks: Optional[List[Look]] = Field(None, description="Looks if collection query")
+    total_looks: Optional[int] = Field(None, description="Total looks if collection query")

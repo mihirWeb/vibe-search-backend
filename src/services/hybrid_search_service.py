@@ -12,6 +12,7 @@ from src.utils.query_parser import QwenQueryParser
 from datetime import datetime
 import asyncio
 import logging
+import traceback
 
 from src.utils.image_processing import (
     download_image,
@@ -126,6 +127,129 @@ class VectorSearchService:
         "watch": ["watches", "accessories"],
         "bag": ["handbags", "accessories"]
     }
+    
+    async def search_by_visual_embedding_with_prefilter(
+        self,
+        db: AsyncSession,
+        query_embedding: List[float],
+        item_type: str,
+        top_k: int = 10,
+        filters: Dict = None
+    ) -> List[Dict]:
+        """
+        Visual search with pre-filtering by category and product_type
+        
+        Args:
+            db: Database session
+            query_embedding: Visual embedding vector
+            item_type: Type of item (top, bottom, shoes, hat, watch, bag)
+            top_k: Number of results to return
+            filters: Additional filters
+        """
+        try:
+            # Get allowed categories and product types for this item type
+            allowed_categories = self.CATEGORY_MAPPINGS.get(item_type, [])
+            allowed_product_types = self.PRODUCT_TYPE_MAPPINGS.get(item_type, [])
+            
+            if not allowed_categories and not allowed_product_types:
+                logger.warning(f"[Visual Pre-filter Search] No category/product_type mappings for: {item_type}")
+                return []
+            
+            logger.debug(f"[Visual Pre-filter Search] Item type: {item_type}")
+            logger.debug(f"[Visual Pre-filter Search] Allowed categories: {allowed_categories}")
+            logger.debug(f"[Visual Pre-filter Search] Allowed product types: {allowed_product_types}")
+            
+            # Convert embedding to PostgreSQL vector string format
+            embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
+            
+            # Build query with category and product_type pre-filtering
+            query_parts = [f"""
+                SELECT 
+                    id, sku_id, title, description, category, sub_category,
+                    brand_name, product_type, gender, colorways, lowest_price,
+                    featured_image, pdp_url, wishlist_num, tags,
+                    1 - (visual_embedding <=> '{embedding_str}'::vector) as similarity_score
+                FROM store_items
+                WHERE visual_embedding IS NOT NULL
+            """]
+            
+            bindparams_list = [bindparam("top_k")]
+            params = {"top_k": top_k * 3}  # Get more results for filtering
+            
+            # Add category and product_type filters
+            if allowed_categories:
+                category_conditions = []
+                for i, cat in enumerate(allowed_categories):
+                    param_name = f"cat_{i}"
+                    category_conditions.append(f"LOWER(category) LIKE LOWER(:{param_name})")
+                    params[param_name] = f"%{cat}%"
+                    bindparams_list.append(bindparam(param_name))
+                
+                category_filter = f"(category IS NOT NULL AND ({' OR '.join(category_conditions)}))"
+                query_parts.append(f" AND {category_filter}")
+
+            if allowed_product_types:
+                product_type_conditions = []
+                for i, ptype in enumerate(allowed_product_types):
+                    param_name = f"ptype_{i}"
+                    product_type_conditions.append(f"LOWER(product_type) LIKE LOWER(:{param_name})")
+                    params[param_name] = f"%{ptype}%"
+                    bindparams_list.append(bindparam(param_name))
+                
+                product_type_filter = f"(({' OR '.join(product_type_conditions)}) OR product_type IS NULL)"
+                query_parts.append(f" AND {product_type_filter}")
+            
+            # Add additional filters
+            if filters:
+                if filters.get("price_range") and len(filters["price_range"]) == 2:
+                    query_parts.append(" AND lowest_price BETWEEN :min_price AND :max_price")
+                    params["min_price"] = filters["price_range"][0]
+                    params["max_price"] = filters["price_range"][1]
+                    bindparams_list.append(bindparam("min_price"))
+                    bindparams_list.append(bindparam("max_price"))
+            
+            # Order by similarity and limit
+            query_parts.append(" ORDER BY similarity_score DESC LIMIT :top_k")
+            query_sql = "".join(query_parts)
+            
+            logger.debug(f"[Visual Pre-filter Search] Executing filtered search for {item_type}")
+            
+            stmt = text(query_sql).bindparams(*bindparams_list)
+            result = await db.execute(stmt, params)
+            rows = result.fetchall()
+            
+            results = [dict(row._mapping) for row in rows]
+            
+            logger.debug(f"[Visual Pre-filter Search] Found {len(results)} results for {item_type}")
+            
+            # Additional Python-level verification
+            verified_results = []
+            for result in results:
+                result_category = (result.get("category") or "").lower()
+                result_product_type = (result.get("product_type") or "").lower()
+                
+                category_match = any(
+                    cat.lower() in result_category or result_category in cat.lower()
+                    for cat in allowed_categories
+                )
+                
+                product_type_match = any(
+                    ptype.lower() in result_product_type or result_product_type in ptype.lower()
+                    for ptype in allowed_product_types
+                )
+                
+                if category_match or product_type_match:
+                    verified_results.append(result)
+            
+            logger.debug(f"[Visual Pre-filter Search] After verification: {len(verified_results)} results")
+            
+            return verified_results[:top_k]
+            
+        except Exception as e:
+            logger.error(f"Visual pre-filter search failed: {e}")
+            logger.error(traceback.format_exc())
+            return []
+
     
     async def search_by_text_embedding_with_prefilter(
         self,
@@ -1265,66 +1389,361 @@ class HybridSearchService:
     async def search_by_image(
         self, 
         db: AsyncSession, 
-        image_url: str, 
+        image_url: str,
+        query: Optional[str] = None,
         top_k: int = 10,
         filters: Dict = None, 
-        rerank: bool = True
+        rerank: bool = True,
+        use_ai_parser: bool = True
     ) -> Dict:
-        """Perform image-based search"""
+        """
+        Perform image-based search with optional text query
+        Follows same process as search_by_text with AI parsing and collection support
+        """
         start_time = datetime.now()
         
         try:
-            print(f"[Hybrid Search] Image search started")
+            logger.info(f"[Image Search] Starting image search with query: {query}")
             
-            # Download image and generate embedding
+            # Download image and generate visual embedding
             image = download_image(image_url)
-            query_embedding = generate_visual_embedding(image)
+            visual_embedding = generate_visual_embedding(image)
             
-            if query_embedding is None or len(query_embedding) == 0:
-                raise ValueError("Failed to generate image embedding")
+            if visual_embedding is None or len(visual_embedding) == 0:
+                raise ValueError("Failed to generate visual embedding from image")
             
-            print(f"[Hybrid Search] Visual embedding dimension: {len(query_embedding)}")
+            logger.info(f"[Image Search] Visual embedding dimension: {len(visual_embedding)}")
             
-            # Perform visual search
-            visual_results = await self.vector_search.search_by_visual_embedding(
-                db, query_embedding, top_k * 2, filters
-            )
+            # Step 1: AI-powered query parsing (if query provided)
+            ai_parsed_query = None
+            refined_query = query or ""
+            ai_filters = {}
+            is_collection_query = False
+            existing_items = {}
             
-            print(f"[Hybrid Search] Visual search results: {len(visual_results)}")
+            if query and use_ai_parser:
+                try:
+                    logger.info(f"[Image Search] Parsing query with AI: {query}")
+                    ai_parsed_query = self.query_parser.parse_query(query)
+                    refined_query = ai_parsed_query.get("refined_query", query)
+                    ai_filters = ai_parsed_query.get("filters", {})
+                    is_collection_query = ai_parsed_query.get("is_collection_query", False)
+                    existing_items = ai_parsed_query.get("existing_items", {})
+                    
+                    logger.info(f"[Image Search] AI parsed - is_collection: {is_collection_query}, types: {ai_filters.get('type', [])}")
+                except Exception as e:
+                    logger.warning(f"[Image Search] AI parsing failed, using original query: {e}")
+                    ai_parsed_query = None
             
-            # Analyze image content
-            image_analysis = self._analyze_image_content(visual_results[:5])
-            
-            # Rerank if requested
-            if rerank:
-                visual_results = self.reranker.rerank_results(
-                    visual_results, {}, mode="visual"
+            # Step 2: Route to collection or normal image search
+            if is_collection_query:
+                return await self._search_image_collection(
+                    db=db,
+                    visual_embedding=visual_embedding,
+                    refined_query=refined_query,
+                    ai_parsed_query=ai_parsed_query,
+                    filters=filters,
+                    rerank=rerank,
+                    start_time=start_time
+                )
+            else:
+                return await self._search_image_normal(
+                    db=db,
+                    visual_embedding=visual_embedding,
+                    refined_query=refined_query,
+                    ai_parsed_query=ai_parsed_query,
+                    filters=filters,
+                    top_k=top_k,
+                    rerank=rerank,
+                    start_time=start_time
                 )
             
-            # Format response
-            search_time = (datetime.now() - start_time).total_seconds() * 1000
-            
-            return {
-                "query_analysis": {
-                    "detected_items": image_analysis["detected_items"],
-                    "extracted_from_image": image_analysis
-                },
-                "matches": visual_results[:top_k],
-                "total_results": len(visual_results),
-                "search_time_ms": round(search_time, 2)
-            }
-            
         except Exception as e:
-            logger.error(f"Image search failed: {e}")
-            import traceback
+            logger.error(f"[Image Search] Search failed: {e}")
             logger.error(traceback.format_exc())
             return {
                 "query_analysis": {"error": str(e)},
                 "matches": [],
                 "total_results": 0,
-                "search_time_ms": 0
+                "search_time_ms": 0,
+                "is_collection_query": False
             }
     
+    async def _search_image_normal(
+        self,
+        db: AsyncSession,
+        visual_embedding: List[float],
+        refined_query: str,
+        ai_parsed_query: Dict,
+        filters: Dict,
+        top_k: int,
+        rerank: bool,
+        start_time: datetime
+    ) -> Dict:
+        """Normal image search with pre-filtering"""
+        ai_filters = ai_parsed_query.get("filters", {}) if ai_parsed_query else {}
+        
+        # Merge filters
+        merged_filters = self._merge_filters(filters, ai_filters)
+        logger.info(f"[Image Search Normal] Merged filters: {merged_filters}")
+        
+        # Analyze image content for query understanding
+        image_analysis = {
+            "search_method": "visual_embedding",
+            "has_text_query": bool(refined_query),
+            "text_query": refined_query if refined_query else None
+        }
+        
+        # Add AI parsing info
+        if ai_parsed_query:
+            image_analysis["ai_parsing"] = {
+                "original_query": ai_parsed_query.get("original_query"),
+                "refined_query": refined_query,
+                "ai_filters": ai_filters,
+                "explanation": ai_parsed_query.get("explanation")
+            }
+        
+        # Check if type filter exists for pre-filtering
+        item_types = ai_filters.get("type", [])
+        
+        if item_types:
+            # Use pre-filter search for each item type
+            logger.info(f"[Image Search Normal] Using pre-filter search for types: {item_types}")
+            
+            visual_results = []
+            for item_type in item_types:
+                type_results = await self.vector_search.search_by_visual_embedding_with_prefilter(
+                    db=db,
+                    query_embedding=visual_embedding,
+                    item_type=item_type,
+                    top_k=top_k * 2,
+                    filters=merged_filters
+                )
+                visual_results.extend(type_results)
+            
+            # Remove duplicates based on sku_id
+            seen_ids = set()
+            unique_visual_results = []
+            for result in visual_results:
+                sku_id = result.get("sku_id")
+                if sku_id and sku_id not in seen_ids:
+                    seen_ids.add(sku_id)
+                    unique_visual_results.append(result)
+            
+            visual_results = unique_visual_results
+            logger.info(f"[Image Search Normal] Pre-filter visual results: {len(visual_results)}")
+        else:
+            # Use regular visual search without pre-filtering
+            logger.info(f"[Image Search Normal] Using regular visual search (no type filter)")
+            visual_results = await self.vector_search.search_by_visual_embedding(
+                db, visual_embedding, top_k * 2, merged_filters
+            )
+            logger.info(f"[Image Search Normal] Regular visual results: {len(visual_results)}")
+        
+        # Apply exclusion filters
+        visual_results = self._apply_exclusion_filters(visual_results, ai_filters)
+        logger.info(f"[Image Search Normal] After exclusions: {len(visual_results)}")
+        
+        # Rerank if requested
+        if rerank and refined_query:
+            query_info = {"original_query": refined_query, "extracted_keywords": []}
+            visual_results = self.reranker.rerank_results(
+                visual_results, query_info, mode="visual"
+            )
+        
+        # Add detected items from top results
+        if len(visual_results) > 0:
+            detected_analysis = self._analyze_image_content(visual_results[:5])
+            image_analysis.update(detected_analysis)
+        
+        # Format response
+        search_time = (datetime.now() - start_time).total_seconds() * 1000
+        
+        return {
+            "query_analysis": image_analysis,
+            "matches": visual_results[:top_k],
+            "total_results": len(visual_results),
+            "search_time_ms": round(search_time, 2),
+            "is_collection_query": False
+        }
+    
+    async def _search_image_collection(
+        self,
+        db: AsyncSession,
+        visual_embedding: List[float],
+        refined_query: str,
+        ai_parsed_query: Dict,
+        filters: Dict,
+        rerank: bool,
+        start_time: datetime
+    ) -> Dict:
+        """Collection search flow for image search"""
+        logger.info("[Image Search Collection] Starting collection search")
+        
+        ai_filters = ai_parsed_query.get("filters", {})
+        item_types = ai_filters.get("type", [])
+        existing_items = ai_parsed_query.get("existing_items", {})
+        
+        # If only 1 item type, route to normal search
+        if len(item_types) <= 1:
+            logger.info(f"[Image Search Collection] Only {len(item_types)} item type(s) detected, routing to normal search")
+            return await self._search_image_normal(
+                db=db,
+                visual_embedding=visual_embedding,
+                refined_query=refined_query,
+                ai_parsed_query={
+                    **ai_parsed_query,
+                    "is_collection_query": False
+                },
+                filters=filters,
+                top_k=10,
+                rerank=rerank,
+                start_time=start_time
+            )
+        
+        # Merge filters
+        merged_filters = self._merge_filters(filters, ai_filters)
+        
+        # Generate 10 complete looks using visual embedding
+        looks = await self._generate_visual_looks(
+            db=db,
+            visual_embedding=visual_embedding,
+            refined_query=refined_query,
+            item_types=item_types,
+            existing_items=existing_items,
+            merged_filters=merged_filters,
+            ai_filters=ai_filters,
+            num_looks=10
+        )
+        
+        # If no looks generated, fallback to normal search
+        if len(looks) == 0:
+            logger.warning("[Image Search Collection] No looks generated, falling back to normal search")
+            return await self._search_image_normal(
+                db=db,
+                visual_embedding=visual_embedding,
+                refined_query=refined_query,
+                ai_parsed_query={
+                    **ai_parsed_query,
+                    "is_collection_query": False
+                },
+                filters=filters,
+                top_k=10,
+                rerank=rerank,
+                start_time=start_time
+            )
+        
+        # Format response
+        search_time = (datetime.now() - start_time).total_seconds() * 1000
+        
+        return {
+            "query_analysis": {
+                "search_method": "visual_embedding_collection",
+                "original_query": ai_parsed_query.get("original_query"),
+                "refined_query": refined_query,
+                "item_types": item_types,
+                "existing_items": existing_items,
+                "explanation": ai_parsed_query.get("explanation")
+            },
+            "looks": looks,
+            "total_looks": len(looks),
+            "search_time_ms": round(search_time, 2),
+            "is_collection_query": True,
+            "matches": [],
+            "total_results": 0
+        }
+    
+    async def _generate_visual_looks(
+        self,
+        db: AsyncSession,
+        visual_embedding: List[float],
+        refined_query: str,
+        item_types: List[str],
+        existing_items: Dict,
+        merged_filters: Dict,
+        ai_filters: Dict,
+        num_looks: int = 10
+    ) -> List[Dict]:
+        """Generate complete looks using visual embedding"""
+        logger.info(f"[Visual Collection] Generating {num_looks} looks for types: {item_types}")
+        
+        # Build search tasks for each item type
+        search_tasks = []
+        
+        for item_type in item_types:
+            task = self._search_visual_sub_type(
+                db=db,
+                visual_embedding=visual_embedding,
+                item_type=item_type,
+                merged_filters=merged_filters,
+                ai_filters=ai_filters,
+                top_k=10  # Get more items per type
+            )
+            search_tasks.append(task)
+        
+        logger.info(f"[Visual Collection] Executing {len(search_tasks)} parallel searches")
+        results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        
+        # Organize results by type
+        items_by_type = {}
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Visual sub-type search failed: {result}")
+                continue
+            
+            item_type = result["item_type"]
+            if item_type not in items_by_type:
+                items_by_type[item_type] = []
+            items_by_type[item_type].extend(result["items"])
+        
+        logger.info(f"[Visual Collection] Found items: {[(k, len(v)) for k, v in items_by_type.items()]}")
+        
+        # Generate looks
+        looks = self._combine_items_into_looks(
+            items_by_type=items_by_type,
+            item_types=item_types,
+            existing_items=existing_items,
+            num_looks=num_looks
+        )
+        
+        return looks
+    
+    async def _search_visual_sub_type(
+        self,
+        db: AsyncSession,
+        visual_embedding: List[float],
+        item_type: str,
+        merged_filters: Dict,
+        ai_filters: Dict,
+        top_k: int = 10
+    ) -> Dict:
+        """Search for items of a specific type using visual embedding"""
+        try:
+            logger.debug(f"[Visual Sub-type Search] Type: {item_type}")
+            
+            results = await self.vector_search.search_by_visual_embedding_with_prefilter(
+                db=db,
+                query_embedding=visual_embedding,
+                item_type=item_type,
+                top_k=top_k * 2,
+                filters=merged_filters
+            )
+            
+            results = self._apply_exclusion_filters(results, ai_filters)
+            
+            logger.debug(f"[Visual Sub-type Search] Found {len(results)} results for {item_type}")
+            
+            return {
+                "item_type": item_type,
+                "items": results[:top_k]
+            }
+        except Exception as e:
+            logger.error(f"Visual sub-type search failed for {item_type}: {e}")
+            return {
+                "item_type": item_type,
+                "items": []
+            }
+                
     def _combine_results(
         self, 
         semantic_results: List[Dict], 
