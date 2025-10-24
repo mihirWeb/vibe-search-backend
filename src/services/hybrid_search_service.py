@@ -1752,16 +1752,6 @@ class HybridSearchService:
         """Combine and deduplicate results from different search methods"""
         combined = {}
         
-        # Add semantic results
-        for result in semantic_results:
-            product_id = result.get("sku_id")
-            if product_id and product_id not in combined:
-                combined[product_id] = {
-                    **result,
-                    "semantic_score": result.get("similarity_score", 0),
-                    "keyword_score": 0
-                }
-        
         # Add keyword results
         for result in keyword_results:
             product_id = result.get("sku_id")
@@ -1774,6 +1764,17 @@ class HybridSearchService:
                         "semantic_score": 0,
                         "keyword_score": result.get("keyword_score", 0)
                     }
+        
+        # Add semantic results
+        for result in semantic_results:
+            product_id = result.get("sku_id")
+            if product_id and product_id not in combined:
+                combined[product_id] = {
+                    **result,
+                    "semantic_score": result.get("similarity_score", 0),
+                    "keyword_score": 0
+                }
+
         
         return list(combined.values())
     
