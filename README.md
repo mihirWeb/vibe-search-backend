@@ -8,10 +8,10 @@
 - [Quick Start](#-quick-start)
 - [Architecture Overview](#️-architecture-overview)
 - [Features](#-features)
+- [Project Structure](#-project-structure)
 - [API Documentation](#-api-documentation)
 - [Model Choices & Rationale](#-model-choices--rationale)
 - [Scraping Strategy](#️-scraping-strategy)
-- [Project Structure](#-project-structure)
 - [Configuration](#-configuration)
 - [Development](#-development)
 
@@ -140,6 +140,106 @@ User Query → Query Parser (AI) → Hybrid Search Engine
 - 🚀 **Async Operations**: Non-blocking I/O for high performance
 - 📊 **Vector Database**: pgvector for efficient similarity search
 - 🐳 **Docker Ready**: One-command deployment
+
+---
+
+## 📁 Project Structure
+
+```
+vibe-search-backend/
+│
+├── 📄 docker-compose.yml          # Docker orchestration
+├── 📄 Dockerfile                  # Container definition
+├── 📄 requirements.txt            # Python dependencies
+├── 📄 .env                        # Environment variables (not in git)
+├── 📄 .env.example               # Example environment config
+├── 📄 .gitignore                 # Git ignore rules
+├── 📄 README.md                  # This file
+├── 📄 QUICK_START.md            # Quick start guide
+│
+├── 📂 src/                       # Source code
+│   ├── 📄 main.py               # FastAPI application entry
+│   │
+│   ├── 📂 config/               # Configuration
+│   │   ├── settings.py          # Pydantic settings
+│   │   └── database.py          # Database connection
+│   │
+│   ├── 📂 routes/               # API endpoints
+│   │   ├── __init__.py
+│   │   ├── health_route.py      # Health check
+│   │   ├── search_route.py      # Search endpoints
+│   │   ├── scraping_route.py    # Scraping endpoints
+│   │   ├── product_route.py     # Product management
+│   │   ├── store_item_route.py  # Store items
+│   │   └── instagram_post_routes.py
+│   │
+│   ├── 📂 controller/           # Business logic layer
+│   │   ├── scraping_controller.py
+│   │   ├── product_controller.py
+│   │   ├── instagram_post_controller.py
+│   │   └── store_item_controller.py
+│   │
+│   ├── 📂 services/             # Core services
+│   │   ├── hybrid_search_service.py      # Search engine
+│   │   ├── instagram_scraper_service.py  # Instagram scraping
+│   │   ├── pinterest_scraper_service.py  # Pinterest scraping
+│   │   ├── product_extraction_service.py # YOLO detection
+│   │   ├── instagram_data_transform_service.py
+│   │   ├── instagram_post_service.py
+│   │   └── store_item_service.py
+│   │
+│   ├── 📂 repository/           # Data access layer
+│   │   ├── instagram_post_repository.py
+│   │   ├── product_repository.py
+│   │   └── store_item_repository.py
+│   │
+│   ├── 📂 models/               # SQLAlchemy models
+│   │   ├── instagram_post_model.py
+│   │   ├── product_model.py
+│   │   ├── product_item_model.py
+│   │   └── store_item_model.py
+│   │
+│   ├── 📂 schemas/              # Pydantic schemas
+│   │   ├── search_schema.py
+│   │   ├── scraping_schema.py
+│   │   ├── product_schema.py
+│   │   ├── store_item_schema.py
+│   │   ├── instagram_post_response_schema.py
+│   │   ├── instagram_transformed_schema.py
+│   │   └── health_schema.py
+│   │
+│   ├── 📂 utils/                # Utilities
+│   │   ├── image_processing.py  # Image utilities
+│   │   ├── query_parser.py      # AI query parser
+│   │   └── category_classifier.py
+│   │
+│   ├── 📂 constants/            # Constants & enums
+│   │   └── store_item_enums.py
+│   │
+│   └── 📂 tests/                # Test suite
+│       └── factories/
+│
+├── 📂 migrations/               # Database migrations
+│   ├── instagram_post_migration.py
+│   └── product_migration.py
+│
+├── 📂 torch_cache/              # ML model cache (Docker volume)
+│
+├── 📂 temp/                     # Temporary files
+│
+└── 📦 Model Files               # Pre-trained weights
+    ├── yolov8n.pt              # YOLO nano
+    ├── yolov8m.pt              # YOLO medium
+    └── vsbyolov8m.pt           # Custom trained
+```
+
+### Key Architectural Patterns
+
+1. **Repository Pattern**: Data access abstraction
+2. **Service Layer**: Business logic separation
+3. **Controller Layer**: Request handling
+4. **Dependency Injection**: Via FastAPI's `Depends()`
+5. **Async/Await**: Non-blocking I/O throughout
 
 ---
 
@@ -318,105 +418,6 @@ CONTAINER          CPU %     MEM USAGE / LIMIT     MEM %
 vibe-search-db     0.5%      650MB / 4GB          16.25%
 vibe-search-backend 15.2%    3.8GB / 8GB          47.5%
 ```
-
-
-## 📁 Project Structure
-
-```
-vibe-search-backend/
-│
-├── 📄 docker-compose.yml          # Docker orchestration
-├── 📄 Dockerfile                  # Container definition
-├── 📄 requirements.txt            # Python dependencies
-├── 📄 .env                        # Environment variables (not in git)
-├── 📄 .env.example               # Example environment config
-├── 📄 .gitignore                 # Git ignore rules
-├── 📄 README.md                  # This file
-├── 📄 QUICK_START.md            # Quick start guide
-│
-├── 📂 src/                       # Source code
-│   ├── 📄 main.py               # FastAPI application entry
-│   │
-│   ├── 📂 config/               # Configuration
-│   │   ├── settings.py          # Pydantic settings
-│   │   └── database.py          # Database connection
-│   │
-│   ├── 📂 routes/               # API endpoints
-│   │   ├── __init__.py
-│   │   ├── health_route.py      # Health check
-│   │   ├── search_route.py      # Search endpoints
-│   │   ├── scraping_route.py    # Scraping endpoints
-│   │   ├── product_route.py     # Product management
-│   │   ├── store_item_route.py  # Store items
-│   │   └── instagram_post_routes.py
-│   │
-│   ├── 📂 controller/           # Business logic layer
-│   │   ├── scraping_controller.py
-│   │   ├── product_controller.py
-│   │   ├── instagram_post_controller.py
-│   │   └── store_item_controller.py
-│   │
-│   ├── 📂 services/             # Core services
-│   │   ├── hybrid_search_service.py      # Search engine
-│   │   ├── instagram_scraper_service.py  # Instagram scraping
-│   │   ├── pinterest_scraper_service.py  # Pinterest scraping
-│   │   ├── product_extraction_service.py # YOLO detection
-│   │   ├── instagram_data_transform_service.py
-│   │   ├── instagram_post_service.py
-│   │   └── store_item_service.py
-│   │
-│   ├── 📂 repository/           # Data access layer
-│   │   ├── instagram_post_repository.py
-│   │   ├── product_repository.py
-│   │   └── store_item_repository.py
-│   │
-│   ├── 📂 models/               # SQLAlchemy models
-│   │   ├── instagram_post_model.py
-│   │   ├── product_model.py
-│   │   ├── product_item_model.py
-│   │   └── store_item_model.py
-│   │
-│   ├── 📂 schemas/              # Pydantic schemas
-│   │   ├── search_schema.py
-│   │   ├── scraping_schema.py
-│   │   ├── product_schema.py
-│   │   ├── store_item_schema.py
-│   │   ├── instagram_post_response_schema.py
-│   │   ├── instagram_transformed_schema.py
-│   │   └── health_schema.py
-│   │
-│   ├── 📂 utils/                # Utilities
-│   │   ├── image_processing.py  # Image utilities
-│   │   ├── query_parser.py      # AI query parser
-│   │   └── category_classifier.py
-│   │
-│   ├── 📂 constants/            # Constants & enums
-│   │   └── store_item_enums.py
-│   │
-│   └── 📂 tests/                # Test suite
-│       └── factories/
-│
-├── 📂 migrations/               # Database migrations
-│   ├── instagram_post_migration.py
-│   └── product_migration.py
-│
-├── 📂 torch_cache/              # ML model cache (Docker volume)
-│
-├── 📂 temp/                     # Temporary files
-│
-└── 📦 Model Files               # Pre-trained weights
-    ├── yolov8n.pt              # YOLO nano
-    ├── yolov8m.pt              # YOLO medium
-    └── vsbyolov8m.pt           # Custom trained
-```
-
-### Key Architectural Patterns
-
-1. **Repository Pattern**: Data access abstraction
-2. **Service Layer**: Business logic separation
-3. **Controller Layer**: Request handling
-4. **Dependency Injection**: Via FastAPI's `Depends()`
-5. **Async/Await**: Non-blocking I/O throughout
 
 ---
 
