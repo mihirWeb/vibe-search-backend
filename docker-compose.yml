@@ -1,0 +1,89 @@
+services:
+  # PostgreSQL with pgvector extension
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: vibe-search-db
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vibe-search-network
+    restart: unless-stopped
+
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vibe-search-backend
+    ports:
+      - "${BACKEND_PORT}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Database connection (using docker service name 'db')
+      DATABASE_URL: ${DATABASE_URL}
+      
+      # CORS
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      
+      # Environment
+      ENVIRONMENT: ${ENVIRONMENT}
+      SECRET_KEY: ${SECRET_KEY}
+      APP_NAME: ${APP_NAME}
+      VERSION: ${VERSION}
+      
+      # Scraping Configuration
+      APIFY_TOKEN: ${APIFY_TOKEN}
+      MIN_DELAY_BETWEEN_REQUESTS: ${MIN_DELAY_BETWEEN_REQUESTS}
+      MAX_POSTS_PER_REQUEST: ${MAX_POSTS_PER_REQUEST}
+      
+      # Apify Actors
+      APIFY_INSTAGRAM_ACTOR_ID: ${APIFY_INSTAGRAM_ACTOR_ID}
+      APIFY_PINTEREST_ACTOR_ID: ${APIFY_PINTEREST_ACTOR_ID}
+      
+      # PyTorch Configuration
+      KMP_DUPLICATE_LIB_OK: ${KMP_DUPLICATE_LIB_OK}
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS}
+      TORCH_HOME: /app/torch_cache
+      
+      # Image Processing
+      USE_MOCK_IMAGE_SERVICE: ${USE_MOCK_IMAGE_SERVICE}
+      IMAGE_PROCESSING_TIMEOUT: ${IMAGE_PROCESSING_TIMEOUT}
+      MAX_IMAGE_SIZE: ${MAX_IMAGE_SIZE}
+      
+      # Hugging Face Token for AI Query Parser
+      HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN}
+    volumes:
+      - .:/app
+      - torch_cache:/app/torch_cache
+    networks:
+      - vibe-search-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    external: true
+    name: assessmentvibesearch_postgres_data
+  torch_cache:
+    external: true
+    name: assessmentvibesearch_torch_cache
+
+networks:
+  vibe-search-network:
+    driver: bridge
